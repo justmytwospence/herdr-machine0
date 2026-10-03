@@ -166,13 +166,28 @@ class Wrapper:
             if key is None:
                 if time.time() - last_poll > 30:
                     last_poll = time.time()
-                    if machine0.status(machine0.get(self.spoke)) == machine0.RUNNING:
+                    try:
+                        now = machine0.status(machine0.get(self.spoke))
+                    except machine0.Machine0Error:
+                        continue
+                    if now == machine0.RUNNING:
                         return
+                    if now != status:
+                        status = now
+                        self.say("  (now %s)\n" % now.lower())
                 continue
             if key in (b"q", b"Q"):
                 raise Quit(close_pane=True)
             if b"\r" in key or b"\n" in key:
-                self.wake()
+                current = machine0.status(machine0.get(self.spoke))
+                if current not in machine0.WAKEABLE:
+                    self.say("  %s is %s; Enter works once it has settled.\n" % (self.spoke, current.lower()))
+                    continue
+                try:
+                    self.wake()
+                except machine0.Machine0Error as e:
+                    self.say("\n  wake failed: %s\n  Enter retries, q closes.\n" % e)
+                    continue
                 return
             if key.startswith(b"\x1b[200~"):
                 self.say("  (paste discarded: the spoke is not running)\n")
