@@ -21,12 +21,20 @@ class BrokerError(Exception):
     pass
 
 
+# A private SDK copy for hosts whose pi is a compiled binary with no JavaScript
+# inside (exe.dev's exeuntu build): bootstrap-m0 installs it here on the hub.
+SDK_DIR = os.path.expanduser("~/.local/share/herdr-machine0/pi-sdk/node_modules/" + PI_PACKAGE)
+
+
 def _is_pi_package(path: str) -> bool:
+    """An importable pi SDK: the package, with its JavaScript entry point."""
     try:
         with open(os.path.join(path, "package.json")) as f:
-            return json.load(f).get("name") == PI_PACKAGE
+            if json.load(f).get("name") != PI_PACKAGE:
+                return False
     except (OSError, ValueError):
         return False
+    return os.path.isfile(os.path.join(path, "dist", "index.js"))
 
 
 def find_pi_package() -> str:
@@ -34,6 +42,8 @@ def find_pi_package() -> str:
     override = config.settings().get("pi_package_dir")
     if override and _is_pi_package(os.path.expanduser(override)):
         return os.path.expanduser(override)
+    if _is_pi_package(SDK_DIR):
+        return SDK_DIR
     binary = shutil.which("pi")
     if not binary:
         raise BrokerError("pi is not on PATH")
@@ -64,12 +74,19 @@ def _script() -> str:
     return os.path.join(config.PLUGIN_ROOT, "broker", "broker.mjs")
 
 
+def min_validity_hours(provider: str) -> float:
+    value = config.settings()["credential_min_validity_h"]
+    if isinstance(value, dict):
+        return float(value.get(provider, value.get("default", 24)))
+    return float(value)
+
+
 def get(provider: str, min_validity_ms: Optional[int] = None) -> Dict[str, Any]:
     """A credential valid for at least min_validity_ms, refresh token replaced."""
     if config.role() != "hub":
         raise BrokerError("the broker only runs on the hub")
     if min_validity_ms is None:
-        min_validity_ms = int(config.settings()["credential_min_validity_h"]) * 3600 * 1000
+        min_validity_ms = int(min_validity_hours(provider) * 3600 * 1000)
     os.makedirs(config.BROKER_DIR, mode=0o700, exist_ok=True)
     lock = open(os.path.join(config.BROKER_DIR, ".lock"), "a+")
     try:

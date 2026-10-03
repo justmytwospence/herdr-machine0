@@ -38,7 +38,9 @@ DEFAULTS: Dict[str, Any] = {
     "load_threshold": 0.3,
     "check_interval_s": 300,
     "brokered_providers": ["openai-codex", "radius"],
-    "credential_min_validity_h": 24,
+    # Hours a credential handed to a spoke must stay valid; the broker refreshes
+    # below that. Keep it under the provider's token lifetime (Radius: 24 h).
+    "credential_min_validity_h": {"default": 24, "radius": 2},
     "usage_ttl_s": 60,
     # How the relay socket reaches a spoke: "unix" (OpenSSH streamlocal, machine0)
     # or "tcp" (a loopback port plus a socket shim, for sshds without streamlocal).

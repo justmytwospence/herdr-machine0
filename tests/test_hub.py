@@ -87,6 +87,7 @@ class BrokerTest(unittest.TestCase):
         os.makedirs(os.path.join(pkg, "dist"))
         with open(os.path.join(pkg, "package.json"), "w") as f:
             json.dump({"name": broker.PI_PACKAGE}, f)
+        open(os.path.join(pkg, "dist", "index.js"), "w").close()
         os.makedirs(os.path.join(root, "libexec", "bin"))
         real = os.path.join(root, "libexec", "bin", "pi")
         with open(real, "w") as f:
@@ -99,12 +100,34 @@ class BrokerTest(unittest.TestCase):
         with mock.patch("shutil.which", return_value=shim):
             self.assertEqual(os.path.realpath(broker.find_pi_package()), os.path.realpath(pkg))
 
+    def test_compiled_pi_falls_back_to_the_private_sdk(self):
+        # exe.dev's pi: package.json beside a compiled binary, no dist/ to import.
+        root = tempfile.mkdtemp()
+        with open(os.path.join(root, "package.json"), "w") as f:
+            json.dump({"name": broker.PI_PACKAGE}, f)
+        binary = os.path.join(root, "pi")
+        open(binary, "wb").close()
+        sdk = os.path.join(tempfile.mkdtemp(), "sdk")
+        os.makedirs(os.path.join(sdk, "dist"))
+        with open(os.path.join(sdk, "package.json"), "w") as f:
+            json.dump({"name": broker.PI_PACKAGE}, f)
+        open(os.path.join(sdk, "dist", "index.js"), "w").close()
+        with mock.patch("shutil.which", return_value=binary):
+            with self.assertRaises(broker.BrokerError):
+                broker.find_pi_package()
+            with mock.patch.object(broker, "SDK_DIR", sdk):
+                self.assertEqual(broker.find_pi_package(), sdk)
+
     def test_refuses_a_real_refresh_token(self):
         fake = mock.Mock(returncode=0, stdout=json.dumps({"access": "a", "refresh": "REAL"}), stderr="")
         with mock.patch("subprocess.run", return_value=fake), \
                 mock.patch.object(broker, "find_pi_package", return_value="/pi"):
             with self.assertRaises(broker.BrokerError):
                 broker.get("openai-codex")
+
+    def test_min_validity_per_provider(self):
+        self.assertEqual(broker.min_validity_hours("radius"), 2)
+        self.assertEqual(broker.min_validity_hours("openai-codex"), 24)
 
     def test_only_on_hub(self):
         with mock.patch.dict(os.environ, {"HERDR_MACHINE0_ROLE": "spoke"}):
