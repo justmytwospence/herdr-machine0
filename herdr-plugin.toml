@@ -1,0 +1,46 @@
+id = "machine0"
+name = "herdr-machine0"
+version = "0.1.0"
+min_herdr_version = "0.9.2"
+description = "A herdr hub for elastic machine0 spokes: one herdr view of agents running on per-project VMs, with brokered subscription logins and idle auto-suspend."
+platforms = ["linux", "macos"]
+
+# Starts the hub daemon (auto-suspend, reattaching restored slot panes) once.
+[[startup]]
+command = ["python3", "-B", "spoke.py", "hubd", "--ensure"]
+
+[[actions]]
+id = "suspend-focused"
+title = "machine0: suspend the focused spoke"
+contexts = ["pane"]
+command = ["python3", "-B", "spoke.py", "action", "suspend-focused"]
+
+[[actions]]
+id = "wake-focused"
+title = "machine0: wake the focused spoke"
+contexts = ["pane"]
+command = ["python3", "-B", "spoke.py", "action", "wake-focused"]
+
+[[actions]]
+id = "keep-awake"
+title = "machine0: toggle keep-awake for the focused spoke"
+contexts = ["pane"]
+command = ["python3", "-B", "spoke.py", "action", "keep-awake"]
+
+[[actions]]
+id = "status"
+title = "machine0: spoke status"
+contexts = ["global"]
+command = ["python3", "-B", "spoke.py", "action", "status"]
+
+[[actions]]
+id = "reconcile"
+title = "machine0: reattach restored spoke panes"
+contexts = ["global"]
+command = ["python3", "-B", "spoke.py", "action", "reconcile"]
+
+[[panes]]
+id = "board"
+title = "machine0 spokes"
+placement = "overlay"
+command = ["python3", "-B", "spoke.py", "board"]
