@@ -284,7 +284,24 @@ def cmd_open_slot(a: argparse.Namespace) -> int:
     return 0
 
 
+def ensure_attention_bridge() -> None:
+    """herdr-attention-queue installs its pi bridge from its herdr startup hook,
+    which never runs on a spoke (no herdr server); install it here instead."""
+    root = os.path.join(os.path.dirname(config.PLUGIN_ROOT), "herdr-attention-queue")
+    if not os.path.isfile(os.path.join(root, "attention_queue", "pi_bridge.py")):
+        return
+    sys.path.insert(0, root)
+    try:
+        from attention_queue import pi_bridge  # type: ignore
+        print("attention-queue pi bridge: %s" % pi_bridge.ensure(root))
+    except Exception as e:
+        print("attention-queue pi bridge not installed: %s" % e, file=sys.stderr)
+    finally:
+        sys.path.remove(root)
+
+
 def cmd_install_pi_extension(a: argparse.Namespace) -> int:
+    ensure_attention_bridge()
     src = os.path.join(config.PLUGIN_ROOT, "pi", "herdr-machine0.ts")
     agent_dir = os.environ.get("PI_CODING_AGENT_DIR") or os.path.expanduser("~/.pi/agent")
     dest = os.path.join(agent_dir, "extensions", "herdr-machine0.ts")
