@@ -223,8 +223,15 @@ def image_build(fresh: bool) -> int:
             sync(BUILDER)
             remote(BUILDER, "~/dotfiles/m0/bin/bootstrap-m0 --role spoke --host machine0", timeout=7200)
         remote(BUILDER, SCRUB_SCRIPT, timeout=300)
-        out = machine0.run(["images", "new", BUILDER, cfg["image"]], timeout=3600)
+        # machine0 only snapshots a stopped instance, and `images save` returns
+        # before the snapshot exists, so stop first and wait for it after.
+        say("stopping %s" % BUILDER)
+        machine0.run(["stop", BUILDER], timeout=600)
+        wait_status(BUILDER, machine0.STOPPED)
+        out = machine0.run(["images", "save", BUILDER, cfg["image"]], timeout=3600)
         m = re.search(r"v(\d+) \(draft\)", out)
+        say("snapshotting (this takes a while)")
+        wait_image(cfg["image"], int(m.group(1)) if m else None)
         if m:
             machine0.run(["images", "versions", "promote", cfg["image"], m.group(1)])
             prune(cfg["image"], keep=2)
@@ -233,6 +240,41 @@ def image_build(fresh: bool) -> int:
         machine0.destroy(BUILDER)
         sshconf.remove(BUILDER)
     return 0
+
+
+def wait_status(name: str, want: str, timeout: float = 900) -> None:
+    deadline = time.time() + timeout
+    while machine0.status(machine0.get(name)) != want:
+        if time.time() > deadline:
+            raise RuntimeError("%s did not reach %s" % (name, want))
+        time.sleep(10)
+
+
+BUSY = ("PENDING", "CREATING", "SNAPSHOT", "PROGRESS", "SAVING", "BUILD", "VERIFY", "CLEANUP", "TRANSFER")
+
+
+def wait_image(image: str, version: Optional[int], timeout: float = 3600) -> None:
+    """Until the image (or that version's snapshot) is ready; raises on failure."""
+    deadline = time.time() + timeout
+    while True:
+        if version is None:
+            entry = next((i for i in machine0.run_json(["images", "ls"])
+                          if isinstance(i, dict) and i.get("name") == image), {})
+            state = str(entry.get("status") or "")
+        else:
+            versions = machine0.run_json(["images", "versions", "ls", image])
+            if isinstance(versions, dict):
+                versions = versions.get("versions") or []
+            entry = next((v for v in versions if isinstance(v, dict) and int(v.get("version") or 0) == version), {})
+            state = str(entry.get("snapshotStatus") or "")
+        up = state.upper()
+        if up and not any(b in up for b in BUSY):
+            if "ERROR" in up or "FAIL" in up:
+                raise RuntimeError("image %s: %s" % (image, state))
+            return
+        if time.time() > deadline:
+            raise RuntimeError("image %s still %s" % (image, state or "missing"))
+        time.sleep(20)
 
 
 def prune(image: str, keep: int) -> None:
