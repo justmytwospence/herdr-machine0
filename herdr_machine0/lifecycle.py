@@ -61,12 +61,18 @@ git pull --rebase --autostash -q
 git submodule sync --recursive -q
 git submodule update --init --recursive -q
 now=$( (git rev-parse HEAD; git submodule status --recursive) | sha1sum | cut -d' ' -f1)
-if [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$now" ]; then echo "dotfiles already current"; exit 0; fi
-(cd plugins/pi-plan-mode && npm ci --omit=dev --no-audit --no-fund --loglevel=error)
-~/dotfiles/shell/.local/bin/dotfiles-restow shell m0 || [ $? -eq 1 ]
-~/dotfiles/shell/.local/bin/skills-install >/dev/null 2>&1 || true
-~/.local/bin/spoke install-pi-extension
-mkdir -p "$(dirname "$stamp")" && echo "$now" > "$stamp"
+# No `exit` here: in a login shell it runs ~/.bash_logout, whose last test
+# (Ubuntu's clear_console check) would become the exit status.
+if [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$now" ]; then
+  echo "dotfiles already current"
+else
+  (cd plugins/pi-plan-mode && npm ci --omit=dev --no-audit --no-fund --loglevel=error)
+  ~/dotfiles/shell/.local/bin/dotfiles-restow shell m0 || [ $? -eq 1 ]
+  ~/dotfiles/shell/.local/bin/skills-install >/dev/null 2>&1 || true
+  ~/.local/bin/spoke install-pi-extension
+  mkdir -p "$(dirname "$stamp")" && echo "$now" > "$stamp"
+fi
+true
 """
 
 
