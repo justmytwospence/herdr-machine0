@@ -126,7 +126,7 @@ spoke new <name> [--size large] [--repo owner/repo]... [--harness pi]
 spoke ls | wake <name> | suspend <name> | ssh <name> [cmd] | keep-awake <name> [on|off]
 spoke rm <name> [--force]            # refuses with unpushed work; archives sessions
 spoke sync <name> | --running        # pull dotfiles and restow on spokes
-spoke image build [--fresh]          # golden image m0-spoke (promote, keep 2 versions)
+spoke image build [--fresh]          # golden image m0-spoke (built, then promoted)
 spoke attach <spoke> [slot] [--harness H] [--cwd DIR] [--takeover]
 spoke popup                          # new agent / new spoke (herdr keybinding)
 spoke secrets show | set KEY | login # hub secrets; `login` opens pi on the broker store
