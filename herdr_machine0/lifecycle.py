@@ -378,7 +378,7 @@ def image_build(fresh: bool) -> int:
         [("create", "Create builder VM", 100), ("boot", "Boot and SSH", 20),
          ("provision", "Provision spoke", 1200 if base == cfg["base_image"] else 240),
          ("scrub", "Scrub credentials", 5), ("stop", "Stop builder", 30),
-         ("snapshot", "Snapshot", 300), ("promote", "Promote and prune", 10),
+         ("snapshot", "Snapshot", 300), ("promote", "Promote", 10),
          ("cleanup", "Delete builder", 20)],
         config.state_path("logs", "image-build.log"))
     try:
@@ -409,8 +409,9 @@ def image_build(fresh: bool) -> int:
                     wait_image(cfg["image"], int(draft.group(1)) if draft else None)
                 with prog.step("promote"):
                     if draft:
+                        # Promoting retires the previous version. machine0 only
+                        # deletes drafts, so retired versions are its to manage.
                         machine0.run(["images", "versions", "promote", cfg["image"], draft.group(1)])
-                        prune(cfg["image"], keep=2)
                         prog.note("promote", "v" + draft.group(1))
             finally:
                 with prog.step("cleanup"):
@@ -458,20 +459,3 @@ def wait_image(image: str, version: Optional[int], timeout: float = 3600) -> Non
         if time.time() > deadline:
             raise RuntimeError("image %s still %s" % (image, state or "missing"))
         time.sleep(20)
-
-
-def prune(image: str, keep: int) -> None:
-    try:
-        versions = machine0.run_json(["images", "versions", "ls", image])
-    except machine0.Machine0Error as e:
-        say("could not list versions of %s: %s" % (image, e))
-        return
-    if isinstance(versions, dict):
-        versions = versions.get("versions") or []
-    numbers = sorted((int(v.get("version")) for v in versions if isinstance(v, dict) and v.get("version")),
-                     reverse=True)
-    for n in numbers[keep:]:
-        try:
-            machine0.run(["images", "versions", "rm", image, str(n), "-y"])
-        except machine0.Machine0Error as e:
-            say("could not remove %s v%d: %s" % (image, n, e))
