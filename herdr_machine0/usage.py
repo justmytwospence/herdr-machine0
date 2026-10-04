@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import threading
 import time
 import urllib.request
 from typing import Any, Dict, Optional
@@ -55,6 +56,43 @@ def _fetch(name: str) -> Dict[str, Any]:
     req = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(req, timeout=10) as resp:
         return json.loads(resp.read().decode())
+
+
+_refreshing: Dict[str, threading.Thread] = {}
+
+
+def _refresh(name: str) -> None:
+    path = _cache(name)
+    try:
+        data = _fetch(name)
+    except Exception:
+        return
+    tmp = path + ".tmp.%d" % threading.get_ident()
+    with open(tmp, "w") as f:
+        json.dump(data, f)
+    os.replace(tmp, path)
+
+
+def get_fast(name: str) -> Dict[str, Any]:
+    """For callers with short timeouts (pi's footer over the relay): the cached
+    copy at once, refreshed in the background when stale; a blocking fetch
+    only when there is no cache at all."""
+    if name not in PROVIDERS:
+        raise ValueError("unknown usage provider %s" % name)
+    path = _cache(name)
+    try:
+        age = time.time() - os.path.getmtime(path)
+        with open(path) as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return get(name)
+    if age > float(config.settings()["usage_ttl_s"]):
+        thread = _refreshing.get(name)
+        if thread is None or not thread.is_alive():
+            thread = threading.Thread(target=_refresh, args=(name,), daemon=True)
+            _refreshing[name] = thread
+            thread.start()
+    return data
 
 
 def get(name: str, ttl: Optional[float] = None) -> Dict[str, Any]:

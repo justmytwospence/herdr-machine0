@@ -87,7 +87,7 @@ class Wrapper:
             return broker.get(provider)
 
         def usage_(params: Dict[str, Any]) -> Dict[str, Any]:
-            return usage.get(str(params.get("name") or "claude"))
+            return usage.get_fast(str(params.get("name") or "claude"))
 
         def open_slot(params: Dict[str, Any]) -> Dict[str, Any]:
             from . import hub
