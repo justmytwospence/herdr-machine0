@@ -71,42 +71,48 @@ def bring_up(name: str) -> Dict[str, Any]:
     return m
 
 
-# A fresh clone of the golden image is usually already current: everything
-# after the pull is skipped when dotfiles and submodules are where the image
-# (or the last sync) left them.
-SYNC_SCRIPT = r"""
-set -e
-cd ~/dotfiles
-stamp=~/.local/state/herdr-machine0/synced
-git pull --rebase --autostash -q
-git submodule sync --recursive -q
-git submodule update --init --recursive -q
-now=$( (git rev-parse HEAD; git submodule status --recursive) | sha1sum | cut -d' ' -f1)
-# No `exit` here: in a login shell it runs ~/.bash_logout, whose last test
-# (Ubuntu's clear_console check) would become the exit status.
-if [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$now" ]; then
-  echo "dotfiles already current"
-else
-  (cd plugins/pi-plan-mode && npm ci --omit=dev --no-audit --no-fund --loglevel=error)
-  ~/dotfiles/shell/.local/bin/dotfiles-restow shell m0 || [ $? -eq 1 ]
-  ~/dotfiles/shell/.local/bin/skills-install >/dev/null 2>&1 || true
-  ~/.local/bin/spoke install-pi-extension
-  mkdir -p "$(dirname "$stamp")" && echo "$now" > "$stamp"
-fi
-true
-"""
+def push_plugin(name: str) -> None:
+    """Copy the hub's plugin checkout to the spoke, so both run the same code."""
+    dest = config.settings()["spoke_plugin_dir"]
+    tar = subprocess.Popen(
+        ["tar", "-C", config.PLUGIN_ROOT, "--exclude", ".git", "--exclude", "__pycache__",
+         "--exclude", "tests", "-czf", "-", "."],
+        stdout=subprocess.PIPE)
+    unpack = ("set -e; d={d}; rm -rf \"$d.new\"; mkdir -p \"$d.new\"; tar -xzf - -C \"$d.new\"; "
+              "rm -rf \"$d\"; mv \"$d.new\" \"$d\"").format(d=dest.replace("~", "$HOME", 1))
+    try:
+        remote(name, unpack, timeout=300, input=tar.stdout.read() if tar.stdout else b"")
+    finally:
+        tar.wait()
+
+
+def provision(name: str) -> None:
+    """Everything a spoke needs: the plugin's setup, then the user's own."""
+    cfg = config.settings()
+    say("provisioning %s" % name)
+    push_plugin(name)
+    remote(name, "bash %s/setup/spoke.sh" % cfg["spoke_plugin_dir"], timeout=3600)
+    if cfg.get("provision_command"):
+        remote(name, cfg["provision_command"], timeout=7200)
 
 
 def sync(name: str) -> bool:
-    """Pull and restow on the spoke; False when it was already current."""
-    say("syncing dotfiles on %s" % name)
-    proc = remote(name, SYNC_SCRIPT, timeout=1800, capture=True)
+    """Bring a running spoke up to date: the plugin, then `sync_command`.
+    False when the user's sync reported it was already current."""
+    cfg = config.settings()
+    say("syncing %s" % name)
+    push_plugin(name)
+    remote(name, "ln -sfn {d}/spoke.py ~/.local/bin/spoke && ~/.local/bin/spoke install-pi-extension"
+           .format(d=cfg["spoke_plugin_dir"]), timeout=300)
+    if not cfg.get("sync_command"):
+        return True
+    proc = remote(name, cfg["sync_command"], timeout=1800, capture=True)
     text = (proc.stdout or b"").decode(errors="replace") + (proc.stderr or b"").decode(errors="replace")
     if _out is not None:
         _out.write(text)
     elif text.strip():
         sys.stderr.write(text)
-    return "dotfiles already current" not in text
+    return "already current" not in text
 
 
 def clone(name: str, repos: List[str]) -> List[str]:
@@ -123,7 +129,9 @@ def clone(name: str, repos: List[str]) -> List[str]:
 
 def spoke_phases(gpu: bool, repos: List[str]) -> List[Any]:
     phases = [("create", "Create VM", 95), ("boot", "Boot and SSH", 10)]
-    phases.append(("bootstrap", "Bootstrap (GPU image)", 1500) if gpu else ("sync", "Sync dotfiles", 45))
+    if gpu:
+        phases.append(("provision", "Provision (GPU image)", 1500))
+    phases.append(("sync", "Sync", 45))
     phases += [("clone", "Clone repos", 15 * max(len(repos), 1)), ("agent", "Start agent", 3)]
     return phases
 
@@ -151,12 +159,11 @@ def create(name: str, size: Optional[str], repos: List[str], harness: Optional[s
             sshconf.update(name, machine0.ip(m) or "")
             wait_ssh(name)
         if gpu:
-            with prog.step("bootstrap"):
-                bootstrap(name)
-        else:
-            with prog.step("sync"):
-                if not sync(name):
-                    prog.note("sync", "already current")
+            with prog.step("provision"):
+                provision(name)
+        with prog.step("sync"):
+            if not sync(name):
+                prog.note("sync", "already current")
         if repos:
             with prog.step("clone"):
                 paths = clone(name, repos)
@@ -272,18 +279,6 @@ def new_in_pane(name: str, size: Optional[str], harness: Optional[str], grace: i
     return 0  # not reached
 
 
-BOOTSTRAP_SCRIPT = r"""
-set -e
-test -d ~/dotfiles || git clone -q {url} ~/dotfiles
-~/dotfiles/m0/bin/bootstrap-m0 --role spoke --host machine0
-"""
-
-
-def bootstrap(name: str) -> None:
-    say("bootstrapping %s (this takes a while)" % name)
-    remote(name, BOOTSTRAP_SCRIPT.format(url=shlex.quote(config.settings()["dotfiles_url"])), timeout=7200)
-
-
 WORK_SCRIPT = r"""
 shopt -s nullglob
 for d in ~/Projects/*/ ~/Projects/*/.worktrees/*/; do
@@ -396,14 +391,10 @@ def image_build(fresh: bool) -> int:
                     sshconf.update(BUILDER, machine0.ip(m) or "")
                     wait_ssh(BUILDER)
                 with prog.step("provision"):
-                    if base == cfg["base_image"]:
-                        bootstrap(BUILDER)
-                    else:
-                        sync(BUILDER)
-                        remote(BUILDER, "~/dotfiles/m0/bin/bootstrap-m0 --role spoke --host machine0",
-                               timeout=7200)
-                    remote(BUILDER, "rm -f ~/.local/state/herdr-machine0/synced", timeout=60)
-                    sync(BUILDER)  # leaves the stamp, so clones skip a redundant sync
+                    provision(BUILDER)
+                    # A sync on the builder lets `sync_command` record where the
+                    # image stands, so fresh clones can skip a redundant one.
+                    sync(BUILDER)
                 with prog.step("scrub"):
                     remote(BUILDER, SCRUB_SCRIPT, timeout=300)
                 # machine0 only snapshots a stopped instance, and `images save`

@@ -45,7 +45,14 @@ DEFAULTS: Dict[str, Any] = {
     # How the relay socket reaches a spoke: "unix" (OpenSSH streamlocal, machine0)
     # or "tcp" (a loopback port plus a socket shim, for sshds without streamlocal).
     "forward": "unix",
-    "dotfiles_url": "https://github.com/justmytwospence/dotfiles.git",
+    # Where the hub pushes its plugin checkout on each spoke.
+    "spoke_plugin_dir": "~/.local/share/herdr-machine0/plugin",
+    # Optional personal setup, run on spokes as shell commands: after the
+    # plugin's own setup when an image (or a GPU spoke) is provisioned, and on
+    # every sync (spoke creation, `spoke sync`). A sync_command that prints
+    # "already current" marks the sync phase as such.
+    "provision_command": None,
+    "sync_command": None,
     "default_harness": "pi",
     # A space opened on the hub (prefix+c, the sidebar) becomes a new spoke.
     "auto_spoke_on_new_space": True,

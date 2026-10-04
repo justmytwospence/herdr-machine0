@@ -51,5 +51,21 @@ class AutoSpokeTest(unittest.TestCase):
         self.assertIsNone(autospoke.handle(json.dumps({"data": {}})))
 
 
+class SetupTest(unittest.TestCase):
+    def test_personal_hooks_off_by_default(self):
+        self.assertIsNone(config.DEFAULTS["provision_command"])
+        self.assertIsNone(config.DEFAULTS["sync_command"])
+
+    def test_doctor_without_a_role_fails(self):
+        import io
+        import contextlib
+        import os
+        from unittest import mock
+        from herdr_machine0 import setup
+        with mock.patch.dict(os.environ, {"HERDR_MACHINE0_ROLE": "unknown"}):
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(setup.doctor(), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

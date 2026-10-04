@@ -63,14 +63,59 @@ Mac / phone ──herdr / Heeler──▶ hub (one herdr server, broker, hubd)
 Never use the broker's logins anywhere else. Refresh tokens rotate on use, so a
 second refresher would log the broker out.
 
-## Requirements
+## Setup
 
-- Hub: Linux or macOS, herdr 0.9.2+, python3 3.9+, node 20+, pi, the `machine0`
-  CLI (`MACHINE0_API_TOKEN`), and an ssh key registered with machine0.
-- Spoke: OpenSSH with streamlocal forwarding (`forward: tcp` covers sshds without
-  it), `dtach`, python3, herdr (CLI only), and the harnesses.
+On the hub (Linux or macOS with herdr 0.9.2+, python3 3.9+, node 20+, git):
 
-The dotfiles' `m0/bin/bootstrap-m0 --role hub|spoke` sets all of this up.
+```sh
+git clone https://github.com/justmytwospence/herdr-machine0 ~/herdr-machine0
+python3 ~/herdr-machine0/spoke.py setup hub   # role, `spoke` CLI, machine0 CLI,
+                                              # broker SDK, ssh key, herdr plugin
+spoke doctor                                  # what is left, and how to fix it
+```
+
+`spoke doctor` then walks you through the rest:
+
+1. A machine0 account and API token (`MACHINE0_API_TOKEN` in the hub's environment).
+2. `machine0 keys new m0-hub --type PUBLIC --publicKeyPath ~/.ssh/id_ed25519.pub --default`.
+3. `machine0 profiles new m0`, and `machine0 integrations connect github -p m0` for
+   private repos on spokes.
+4. `claude setup-token`, then `spoke secrets set CLAUDE_CODE_OAUTH_TOKEN`.
+5. `spoke secrets login` for the brokered logins (OpenAI Codex, Radius, plus
+   Anthropic for the plan-usage gauges).
+6. `spoke image build --fresh` for the golden image.
+
+Spokes need nothing by hand. The image build pushes the plugin to the builder
+VM and runs `setup/spoke.sh`, which installs dtach, the herdr CLI, pi, Claude
+Code, Codex and opencode, the herdr integrations, the spoke pi extension and
+an sshd setting. Spokes always run the hub's copy of the plugin: every spoke
+creation and `spoke sync` pushes it again.
+
+### Personal setup
+
+Spokes built that way are plain. Two settings in
+`~/.config/herdr-machine0/config.json` add your own setup, as shell commands
+run on the spoke:
+
+- `provision_command`: after `setup/spoke.sh` when the golden image (or a GPU
+  spoke) is provisioned. For example, clone your dotfiles and run their
+  bootstrap.
+- `sync_command`: on every spoke creation and `spoke sync`. For example, pull
+  your dotfiles. If it prints "already current", the sync phase says so.
+
+Optional extras: a checkout of
+[herdr-attention-queue](https://github.com/justmytwospence/herdr-attention-queue)
+gets its pi bridge installed on spokes when `$HERDR_MACHINE0_ATTENTION_QUEUE`
+points at it during `spoke install-pi-extension`. herdr plugins cannot bind
+keys, so add any shortcuts to your hub's herdr config yourself, for example:
+
+```toml
+[[keys.command]]
+key = "prefix+shift+n"
+type = "popup"
+command = '"$HOME/.local/bin/spoke" popup'
+description = "machine0: new agent / new spoke"
+```
 
 ## Commands
 
@@ -87,6 +132,7 @@ spoke popup                          # new agent / new spoke (herdr keybinding)
 spoke secrets show | set KEY | login # hub secrets; `login` opens pi on the broker store
 spoke token <provider>               # fresh access token (for hub-side tools)
 spoke usage claude|codex
+spoke setup hub | doctor              # install, then check everything
 spoke hub-status | reconcile [--all] | hubd [--ensure] | role [hub|spoke]
 ```
 
@@ -105,7 +151,8 @@ herdr actions (plugin id `machine0`): `suspend-focused`, `wake-focused`,
 ## Configuration
 
 `~/.config/herdr-machine0/config.json` overrides the defaults in
-`herdr_machine0/config.py`: region, size, image, profile, the ssh key name,
+`herdr_machine0/config.py`: `provision_command` and `sync_command` (above),
+region, size, image, profile, the ssh key name,
 idle minutes, load threshold, brokered providers, paste directories,
 `forward` (`unix` or `tcp`), and `static_spokes` (non-machine0 hosts treated as
 always running: `{name: {host, user, home}}`).

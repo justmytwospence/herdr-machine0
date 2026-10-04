@@ -259,6 +259,18 @@ def cmd_action(a: argparse.Namespace) -> int:
     return actions.run(a.id)
 
 
+def cmd_setup(a: argparse.Namespace) -> int:
+    if a.target == "hub":
+        from . import setup
+        return setup.setup_hub()
+    return subprocess.call(["bash", os.path.join(config.PLUGIN_ROOT, "setup", "spoke.sh")])
+
+
+def cmd_doctor(a: argparse.Namespace) -> int:
+    from . import setup
+    return setup.doctor()
+
+
 def cmd_role(a: argparse.Namespace) -> int:
     if a.role:
         os.makedirs(config.CONFIG_DIR, exist_ok=True)
@@ -294,9 +306,13 @@ def cmd_open_slot(a: argparse.Namespace) -> int:
 
 def ensure_attention_bridge() -> None:
     """herdr-attention-queue installs its pi bridge from its herdr startup hook,
-    which never runs on a spoke (no herdr server); install it here instead."""
-    root = os.path.join(os.path.dirname(config.PLUGIN_ROOT), "herdr-attention-queue")
-    if not os.path.isfile(os.path.join(root, "attention_queue", "pi_bridge.py")):
+    which never runs on a spoke (no herdr server); install it here instead, when
+    a checkout of it is around ($HERDR_MACHINE0_ATTENTION_QUEUE, or a sibling)."""
+    candidates = [os.environ.get("HERDR_MACHINE0_ATTENTION_QUEUE", ""),
+                  os.path.join(os.path.dirname(config.PLUGIN_ROOT), "herdr-attention-queue")]
+    root = next((c for c in candidates
+                 if c and os.path.isfile(os.path.join(c, "attention_queue", "pi_bridge.py"))), None)
+    if not root:
         return
     sys.path.insert(0, root)
     try:
@@ -430,6 +446,13 @@ def parser() -> argparse.ArgumentParser:
     s = sub.add_parser("action", help="herdr plugin action")
     s.add_argument("id")
     s.set_defaults(fn=cmd_action)
+
+    s = sub.add_parser("setup", help="install what herdr-machine0 needs on this hub or spoke")
+    s.add_argument("target", choices=("hub", "spoke"))
+    s.set_defaults(fn=cmd_setup)
+
+    s = sub.add_parser("doctor", help="check this hub (or spoke) and say how to fix gaps")
+    s.set_defaults(fn=cmd_doctor)
 
     s = sub.add_parser("role", help="show or set this machine's role")
     s.add_argument("role", nargs="?", choices=("hub", "spoke"))
