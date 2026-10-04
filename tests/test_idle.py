@@ -33,6 +33,16 @@ class IdleTest(unittest.TestCase):
         self.assertEqual(idle.decide(True, 1000.0, 1000.0 + 119 * 60, 120), (False, 1000.0))
         self.assertEqual(idle.decide(True, 1000.0, 1000.0 + 120 * 60, 120), (True, 1000.0))
 
+    def test_recent_agent_activity_keeps_awake(self):
+        self.assertEqual(idle.idle_now([], 0.0, False, 0.3, 30, 600)[0], False)
+        self.assertEqual(idle.idle_now([], 0.0, False, 0.3, 900, 600), (True, "idle"))
+        self.assertEqual(idle.idle_now([], 0.0, False, 0.3, None, 600), (True, "idle"))
+
+    def test_probe_output(self):
+        self.assertEqual(idle.parse_probe("0.1 0.2 0.05 1/2 3\n1000 900\n"), (0.05, 100.0))
+        self.assertEqual(idle.parse_probe("0.1 0.2 0.05 1/2 3\n1000 \n"), (0.05, None))
+        self.assertEqual(idle.parse_probe(""), (None, None))
+
     def test_loadavg(self):
         self.assertEqual(idle.parse_loadavg("0.10 0.20 0.30 1/200 1234"), 0.30)
         self.assertIsNone(idle.parse_loadavg(""))

@@ -17,6 +17,8 @@ PLUGIN_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 ROLE_FILE = os.path.join(CONFIG_DIR, "role")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
+# Machine-local overrides on top of config.json (which may be tracked elsewhere).
+LOCAL_CONFIG_FILE = os.path.join(CONFIG_DIR, "config.local.json")
 SECRETS_FILE = os.path.join(CONFIG_DIR, "secrets.env")
 BROKER_DIR = os.path.join(CONFIG_DIR, "broker")
 KNOWN_HOSTS = os.path.join(CONFIG_DIR, "known_hosts")
@@ -74,13 +76,14 @@ HARNESSES = ("pi", "claude", "codex", "opencode")
 
 def settings() -> Dict[str, Any]:
     merged = dict(DEFAULTS)
-    try:
-        with open(CONFIG_FILE) as f:
-            user = json.load(f)
-        if isinstance(user, dict):
-            merged.update(user)
-    except (OSError, ValueError):
-        pass
+    for path in (CONFIG_FILE, LOCAL_CONFIG_FILE):
+        try:
+            with open(path) as f:
+                user = json.load(f)
+            if isinstance(user, dict):
+                merged.update({k: v for k, v in user.items() if not k.startswith("_")})
+        except (OSError, ValueError):
+            pass
     return merged
 
 

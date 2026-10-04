@@ -10,7 +10,7 @@ import os
 import subprocess
 import sys
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from . import config, herdr, hub, idle, machine0, registry, sshconf
 
@@ -66,15 +66,16 @@ def slot_view(path: Optional[str]) -> Dict[str, List[Dict[str, Any]]]:
     return out
 
 
-def load15(spoke: str) -> Optional[float]:
+def probe(spoke: str) -> Tuple[Optional[float], Optional[float]]:
+    """(load15, seconds since an agent last wrote a session file); Nones on failure."""
     try:
         out = subprocess.run(
-            config.ssh_base() + ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", sshconf.alias(spoke), "cat /proc/loadavg"],
+            config.ssh_base() + ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", sshconf.alias(spoke), idle.PROBE],
             capture_output=True, text=True, timeout=30,
         )
     except subprocess.TimeoutExpired:
-        return None
-    return idle.parse_loadavg(out.stdout) if out.returncode == 0 else None
+        return None, None
+    return idle.parse_probe(out.stdout) if out.returncode == 0 else (None, None)
 
 
 def check(path: Optional[str]) -> None:
@@ -92,8 +93,11 @@ def check(path: Optional[str]) -> None:
                 registry.put_spoke(name, idle_since=None)
             continue
         sshconf.update(name, machine0.ip(m) or "")
-        is_idle, reason = idle.idle_now(view.get(name, []), load15(name),
-                                        bool(info.get("keep_awake")), float(cfg["load_threshold"]))
+        load, activity = probe(name)
+        # Any agent write within two check intervals counts as activity.
+        is_idle, reason = idle.idle_now(view.get(name, []), load, bool(info.get("keep_awake")),
+                                        float(cfg["load_threshold"]), activity,
+                                        2 * float(cfg["check_interval_s"]))
         suspend, since = idle.decide(is_idle, info.get("idle_since"), now, float(cfg["idle_minutes"]))
         if since != info.get("idle_since"):
             registry.put_spoke(name, idle_since=since)
@@ -128,10 +132,9 @@ def main() -> int:
             log("reattached %s" % ", ".join(restarted))
     except (herdr.Unavailable, herdr.HerdrError) as e:
         log("reconcile failed: %s" % e)
-    interval = float(config.settings()["check_interval_s"])
     while True:
         try:
             check(path)
         except Exception as e:  # keep the daemon alive; the log says why
             log("check failed: %s" % e)
-        time.sleep(interval)
+        time.sleep(float(config.settings()["check_interval_s"]))
