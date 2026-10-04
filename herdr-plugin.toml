@@ -9,6 +9,11 @@ platforms = ["linux", "macos"]
 [[startup]]
 command = ["python3", "-B", "spoke.py", "hubd", "--ensure"]
 
+# A space the user opens on the hub becomes a new spoke (autospoke.py).
+[[events]]
+on = "workspace.created"
+command = ["python3", "-B", "spoke.py", "on-workspace-created"]
+
 [[actions]]
 id = "suspend-focused"
 title = "machine0: suspend the focused spoke"

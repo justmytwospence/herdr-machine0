@@ -47,6 +47,9 @@ DEFAULTS: Dict[str, Any] = {
     "forward": "unix",
     "dotfiles_url": "https://github.com/justmytwospence/dotfiles.git",
     "default_harness": "pi",
+    # A space opened on the hub (prefix+c, the sidebar) becomes a new spoke.
+    "auto_spoke_on_new_space": True,
+    "auto_spoke_grace_s": 5,
     # The spoke-side entry point (spokes link ~/.local/bin/spoke to their checkout).
     "spoke_command": "~/.local/bin/spoke",
     # Spokes that are not machine0 VMs (always "running"): {name: {host, user, home}}.

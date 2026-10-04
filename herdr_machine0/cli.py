@@ -34,6 +34,9 @@ def cmd_attach(a: argparse.Namespace) -> int:
 def cmd_new(a: argparse.Namespace) -> int:
     need("hub")
     from . import herdr, lifecycle
+    if a.in_pane:
+        return lifecycle.new_in_pane(a.name, a.size, a.harness,
+                                     int(config.settings()["auto_spoke_grace_s"]))
     try:
         rc = lifecycle.new(a.name, a.size, a.repo or [], a.harness, focus=not a.no_focus)
     except Exception as e:
@@ -42,6 +45,11 @@ def cmd_new(a: argparse.Namespace) -> int:
     if rc == 0:
         herdr.notify("%s is ready" % a.name, "its pane is open")
     return rc
+
+
+def cmd_on_workspace_created(a: argparse.Namespace) -> int:
+    from . import autospoke
+    return autospoke.main()
 
 
 def cmd_rm(a: argparse.Namespace) -> int:
@@ -348,7 +356,11 @@ def parser() -> argparse.ArgumentParser:
     s.add_argument("--repo", action="append", help="owner/repo to clone into ~/Projects (repeatable)")
     s.add_argument("--harness", choices=config.HARNESSES)
     s.add_argument("--no-focus", action="store_true")
+    s.add_argument("--in-pane", action="store_true", help="create here, then become its main slot")
     s.set_defaults(fn=cmd_new)
+
+    s = sub.add_parser("on-workspace-created", help="(hook) turn a new hub space into a spoke")
+    s.set_defaults(fn=cmd_on_workspace_created)
 
     s = sub.add_parser("rm", help="destroy a spoke (refuses with unpushed work)")
     s.add_argument("name")

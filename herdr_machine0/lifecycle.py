@@ -80,31 +80,96 @@ def clone(name: str, repos: List[str]) -> List[str]:
     return paths
 
 
-def new(name: str, size: Optional[str], repos: List[str], harness: Optional[str], focus: bool = True) -> int:
+def create(name: str, size: Optional[str], repos: List[str], harness: Optional[str]) -> str:
+    """Create, bring up and provision a spoke; returns the main slot's cwd."""
     cfg = config.settings()
     if not NAME_RE.match(name) or name == BUILDER:
-        say("spoke names are lowercase letters, digits and dashes")
-        return 2
+        raise ValueError("spoke names are lowercase letters, digits and dashes")
     if machine0.get(name):
-        say("%s already exists" % name)
-        return 1
+        raise ValueError("%s already exists" % name)
     size = size or cfg["default_size"]
     harness = harness or cfg["default_harness"]
     gpu = size.startswith("gpu-")
     region = cfg["gpu_region"] if gpu else cfg["region"]
     say("creating %s (%s, %s)" % (name, size, region))
-    machine0.new(name, size, region, None if gpu else cfg["image"], cfg["ssh_key"], cfg["profile"])
     registry.put_spoke(name, size=size, region=region, harness=harness, keep_awake=False, idle_since=None)
+    machine0.new(name, size, region, None if gpu else cfg["image"], cfg["ssh_key"], cfg["profile"])
     bring_up(name)
     if gpu:
         bootstrap(name)
     else:
         sync(name)
     paths = clone(name, repos)
-    cwd = paths[0] if paths else "~"
+    registry.put_spoke(name, pending=False)
+    return paths[0] if paths else "~"
+
+
+def new(name: str, size: Optional[str], repos: List[str], harness: Optional[str], focus: bool = True) -> int:
+    try:
+        cwd = create(name, size, repos, harness)
+    except ValueError as e:
+        say(str(e))
+        return 1
+    harness = harness or config.settings()["default_harness"]
     hub.open_slot(name, "main", harness, cwd, focus=focus)
     say("%s is up" % name)
     return 0
+
+
+def _grace(seconds: int) -> bool:
+    """Count down; True to go ahead, False when a key was pressed."""
+    import select
+    import termios
+    import tty
+    if not os.isatty(0):
+        return True
+    old = termios.tcgetattr(0)
+    tty.setcbreak(0)
+    try:
+        for left in range(seconds, 0, -1):
+            sys.stderr.write("\r  starting in %ds -- press any key to keep a plain hub shell " % left)
+            sys.stderr.flush()
+            r, _, _ = select.select([0], [], [], 1)
+            if r:
+                os.read(0, 64)
+                return False
+        return True
+    finally:
+        termios.tcsetattr(0, termios.TCSADRAIN, old)
+        sys.stderr.write("\n")
+
+
+def new_in_pane(name: str, size: Optional[str], harness: Optional[str], grace: int = 5) -> int:
+    """`spoke new --in-pane`: the new-space hook's command. Creates the spoke in
+    front of you, then turns this pane into the spoke's main slot."""
+    cfg = config.settings()
+    size = size or cfg["default_size"]
+    harness = harness or cfg["default_harness"]
+    say("\n  New space, new spoke: %s (%s, %s, %s)." % (name, size, cfg["region"], harness))
+    if not _grace(grace):
+        registry.drop_spoke(name)
+        say("  Kept as a plain hub shell. `spoke new <name>` makes a spoke later.")
+        return 0
+    try:
+        cwd = create(name, size, [], harness)
+    except KeyboardInterrupt:
+        say("\n  cancelled; removing %s" % name)
+        try:
+            if machine0.get(name):
+                machine0.destroy(name)
+        except machine0.Machine0Error as e:
+            say("  could not destroy %s: %s (spoke rm %s --force)" % (name, e, name))
+        sshconf.remove(name)
+        registry.drop_spoke(name)
+        return 130
+    except Exception as e:
+        say("\n  creating %s failed: %s\n  `spoke rm %s --force` cleans up." % (name, e, name))
+        return 1
+    registry.put_slot(name, "main", harness=harness, cwd=cwd, pane_id=os.environ.get("HERDR_PANE_ID"))
+    argv = [sys.executable, "-B", os.path.join(config.PLUGIN_ROOT, "spoke.py"),
+            "attach", name, "main", "--harness", harness, "--cwd", cwd]
+    os.execv(argv[0], argv)
+    return 0  # not reached
 
 
 BOOTSTRAP_SCRIPT = r"""

@@ -26,7 +26,12 @@ def workspaces(path: Optional[str] = None) -> List[Dict[str, Any]]:
 
 
 def spoke_workspace(spoke: str, path: Optional[str] = None) -> Optional[str]:
-    for ws in workspaces(path):
+    """The spoke's space: the one recorded for it if still open, else by label."""
+    spaces = workspaces(path)
+    recorded = (registry.load()["spokes"].get(spoke) or {}).get("workspace_id")
+    if recorded and any(ws.get("workspace_id") == recorded for ws in spaces):
+        return recorded
+    for ws in spaces:
         if ws.get("label") == spoke:
             return ws.get("workspace_id")
     return None
@@ -40,6 +45,7 @@ def open_slot(spoke: str, slot: str, harness: str, cwd: Optional[str],
     if ws is None:
         result = herdr.call("workspace.create", {"cwd": pane_cwd, "label": spoke, "focus": focus}, path)
         pane_id = result["root_pane"]["pane_id"]
+        registry.put_spoke(spoke, workspace_id=result["workspace"]["workspace_id"])
     else:
         result = herdr.call("tab.create", {"workspace_id": ws, "cwd": pane_cwd, "label": slot, "focus": focus}, path)
         pane_id = (result.get("root_pane") or {}).get("pane_id") or _first_pane(result, path)

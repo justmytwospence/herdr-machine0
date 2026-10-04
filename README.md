@@ -33,6 +33,13 @@ Mac / phone ──herdr / Heeler──▶ hub (one herdr server, broker, hubd)
   those panes, which it finds by their cwd (each slot pane's cwd is that slot's
   own directory).
 - **Credentials.** See below. Claude and Codex never fall back to API billing.
+- **New space, new spoke.** A space you open on the hub (prefix+c, the
+  sidebar) becomes a new spoke: the plugin's `workspace.created` hook names one
+  (`brisk-otter`), renames the space, and runs `spoke new <name> --in-pane` in
+  it. That shows a 5-second grace period (any key keeps a plain hub shell),
+  creates the VM from the golden image, and turns the pane into the spoke's main
+  slot. Spaces herdr-machine0 opens itself, worktree spaces and restored
+  sessions are left alone. Off with `"auto_spoke_on_new_space": false`.
 - **Auto-suspend.** `spoke hubd` suspends a spoke once every slot has been
   idle or done for 2 hours, with no attention-queue `bg` or `activity` token,
   a 15-minute load under 0.3, and keep-awake off. A suspended spoke's pane shows
