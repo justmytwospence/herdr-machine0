@@ -91,7 +91,9 @@ def handle(event_json: str, path: Optional[str] = None) -> Optional[str]:
     # a spoke's space, not a user's.
     registry.put_spoke(name, pending=True, workspace_id=workspace_id)
     herdr.quiet("workspace.rename", {"workspace_id": workspace_id, "label": name}, path)
-    command = "cd %s && spoke new %s --in-pane" % (shlex.quote(config.slot_dir(name, "main")), shlex.quote(name))
+    # Kept as a hub shell (or failed): back to ~ rather than the unused slot dir.
+    command = "cd %s && spoke new %s --in-pane || cd ~" % (
+        shlex.quote(config.slot_dir(name, "main")), shlex.quote(name))
     herdr.call("pane.send_text", {"pane_id": pane_id, "text": command}, path)
     herdr.call("pane.send_keys", {"pane_id": pane_id, "keys": ["enter"]}, path)
     return name

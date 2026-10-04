@@ -139,6 +139,9 @@ def _grace(seconds: int) -> bool:
         sys.stderr.write("\n")
 
 
+KEPT = 3  # exit status of `new --in-pane` when the user keeps a hub shell
+
+
 def new_in_pane(name: str, size: Optional[str], harness: Optional[str], grace: int = 5) -> int:
     """`spoke new --in-pane`: the new-space hook's command. Creates the spoke in
     front of you, then turns this pane into the spoke's main slot."""
@@ -148,8 +151,13 @@ def new_in_pane(name: str, size: Optional[str], harness: Optional[str], grace: i
     say("\n  New space, new spoke: %s (%s, %s, %s)." % (name, size, cfg["region"], harness))
     if not _grace(grace):
         registry.drop_spoke(name)
+        import shutil
+        shutil.rmtree(os.path.join(config.STATE_DIR, "panes", name), ignore_errors=True)
+        workspace = os.environ.get("HERDR_WORKSPACE_ID")
+        if workspace:
+            herdr.quiet("workspace.rename", {"workspace_id": workspace, "label": "hub"})
         say("  Kept as a plain hub shell. `spoke new <name>` makes a spoke later.")
-        return 0
+        return KEPT
     try:
         cwd = create(name, size, [], harness)
     except KeyboardInterrupt:
