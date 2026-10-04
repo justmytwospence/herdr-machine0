@@ -122,7 +122,7 @@ def clone(name: str, repos: List[str]) -> List[str]:
 
 
 def spoke_phases(gpu: bool, repos: List[str]) -> List[Any]:
-    phases = [("create", "Create VM", 100), ("boot", "Boot and SSH", 20)]
+    phases = [("create", "Create VM", 95), ("boot", "Boot and SSH", 10)]
     phases.append(("bootstrap", "Bootstrap (GPU image)", 1500) if gpu else ("sync", "Sync dotfiles", 45))
     phases += [("clone", "Clone repos", 15 * max(len(repos), 1)), ("agent", "Start agent", 3)]
     return phases
@@ -146,8 +146,10 @@ def create(name: str, size: Optional[str], repos: List[str], harness: Optional[s
         registry.put_spoke(name, size=size, region=region, harness=harness, keep_awake=False, idle_since=None)
         with prog.step("create"):
             machine0.new(name, size, region, None if gpu else cfg["image"], cfg["ssh_key"], cfg["profile"])
+            m = machine0.wait_running(name)
         with prog.step("boot"):
-            bring_up(name)
+            sshconf.update(name, machine0.ip(m) or "")
+            wait_ssh(name)
         if gpu:
             with prog.step("bootstrap"):
                 bootstrap(name)
@@ -388,9 +390,11 @@ def image_build(fresh: bool) -> int:
         with prog, logging_to(prog):
             with prog.step("create"):
                 machine0.new(BUILDER, "large", cfg["region"], base, cfg["ssh_key"], None)
+                m = machine0.wait_running(BUILDER)
             try:
                 with prog.step("boot"):
-                    bring_up(BUILDER)
+                    sshconf.update(BUILDER, machine0.ip(m) or "")
+                    wait_ssh(BUILDER)
                 with prog.step("provision"):
                     if base == cfg["base_image"]:
                         bootstrap(BUILDER)
@@ -410,13 +414,13 @@ def image_build(fresh: bool) -> int:
                 with prog.step("snapshot"):
                     out = machine0.run(["images", "save", BUILDER, cfg["image"]], timeout=3600)
                     say(out)
-                    m = re.search(r"v(\d+) \(draft\)", out)
-                    wait_image(cfg["image"], int(m.group(1)) if m else None)
+                    draft = re.search(r"v(\d+) \(draft\)", out)
+                    wait_image(cfg["image"], int(draft.group(1)) if draft else None)
                 with prog.step("promote"):
-                    if m:
-                        machine0.run(["images", "versions", "promote", cfg["image"], m.group(1)])
+                    if draft:
+                        machine0.run(["images", "versions", "promote", cfg["image"], draft.group(1)])
                         prune(cfg["image"], keep=2)
-                        prog.note("promote", "v" + m.group(1))
+                        prog.note("promote", "v" + draft.group(1))
             finally:
                 with prog.step("cleanup"):
                     machine0.destroy(BUILDER)
