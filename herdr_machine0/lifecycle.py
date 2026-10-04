@@ -50,16 +50,23 @@ def bring_up(name: str) -> Dict[str, Any]:
     return m
 
 
+# A fresh clone of the golden image is usually already current: everything
+# after the pull is skipped when dotfiles and submodules are where the image
+# (or the last sync) left them.
 SYNC_SCRIPT = r"""
 set -e
 cd ~/dotfiles
+stamp=~/.local/state/herdr-machine0/synced
 git pull --rebase --autostash -q
 git submodule sync --recursive -q
 git submodule update --init --recursive -q
+now=$( (git rev-parse HEAD; git submodule status --recursive) | sha1sum | cut -d' ' -f1)
+if [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$now" ]; then echo "dotfiles already current"; exit 0; fi
 (cd plugins/pi-plan-mode && npm ci --omit=dev --no-audit --no-fund --loglevel=error)
 ~/dotfiles/shell/.local/bin/dotfiles-restow shell m0 || [ $? -eq 1 ]
 ~/dotfiles/shell/.local/bin/skills-install >/dev/null 2>&1 || true
 ~/.local/bin/spoke install-pi-extension
+mkdir -p "$(dirname "$stamp")" && echo "$now" > "$stamp"
 """
 
 
@@ -295,6 +302,8 @@ def image_build(fresh: bool) -> int:
         else:
             sync(BUILDER)
             remote(BUILDER, "~/dotfiles/m0/bin/bootstrap-m0 --role spoke --host machine0", timeout=7200)
+        remote(BUILDER, "rm -f ~/.local/state/herdr-machine0/synced", timeout=60)
+        sync(BUILDER)  # leaves the stamp, so clones skip a redundant sync
         remote(BUILDER, SCRUB_SCRIPT, timeout=300)
         # machine0 only snapshots a stopped instance, and `images save` returns
         # before the snapshot exists, so stop first and wait for it after.
