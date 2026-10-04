@@ -145,9 +145,15 @@ def doctor_hub(r: Report) -> None:
     def account():
         if not shutil.which("machine0"):
             return "fail", "CLI missing", "spoke setup hub"
-        data = _m0_json(["account"])
-        balance = data.get("walletBalance", data.get("balance")) if isinstance(data, dict) else None
-        return "ok", "balance %s" % balance if balance is not None else "logged in", ""
+        user = (_m0_json(["account"]) or {}).get("user") or {}
+        balance = user.get("walletBalance")
+        text = "balance $%.2f" % (balance / 1e6) if isinstance(balance, (int, float)) else "logged in"
+        if not user.get("autoTopUpEnabled"):
+            # A wallet at its threshold gets every VM snapshotted and destroyed.
+            return "warn", text + ", auto-topup off", "turn on auto-topup in the machine0 dashboard"
+        if user.get("lastAutoTopUpFailedAt"):
+            return "warn", text + ", last auto-topup failed", str(user.get("lastAutoTopUpFailureReason") or "")
+        return "ok", text + ", auto-topup on", ""
     r.check("machine0 account", account)
 
     def ssh_key():
@@ -163,7 +169,7 @@ def doctor_hub(r: Report) -> None:
             return "fail", "no profile %s" % cfg["profile"], "machine0 profiles new %s" % cfg["profile"]
         rows = _m0_json(["integrations", "ls", "-p", cfg["profile"]])
         github = next((x for x in rows if isinstance(x, dict) and x.get("name") == "github"), {})
-        if str(github.get("status", "")).lower() != "connected":
+        if not (github.get("connected") is True or str(github.get("status", "")).lower() == "connected"):
             return "warn", "GitHub not connected (spokes cannot clone private repos)", \
                 "machine0 integrations connect github -p %s" % cfg["profile"]
         return "ok", "%s, GitHub connected" % cfg["profile"], ""
