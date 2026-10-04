@@ -8,23 +8,44 @@ import shlex
 import subprocess
 import sys
 import time
-from typing import Any, Dict, List, Optional
+import contextlib
+from typing import Any, Dict, Iterator, List, Optional
 
-from . import config, herdr, hub, machine0, registry, sshconf
+from . import config, herdr, hub, machine0, progress, registry, sshconf
 
 NAME_RE = re.compile(r"^[a-z][a-z0-9-]{1,40}$")
 BUILDER = "m0-spoke-build"
 
 
+# While a progress display owns the terminal, command output and messages go to
+# its log instead (see progress.py).
+_out: Optional[Any] = None
+
+
 def say(msg: str) -> None:
-    print(msg, file=sys.stderr, flush=True)
+    if _out is not None:
+        _out.write(msg + "\n")
+        _out.flush()
+    else:
+        print(msg, file=sys.stderr, flush=True)
+
+
+@contextlib.contextmanager
+def logging_to(prog: Any) -> Iterator[None]:
+    global _out
+    previous, _out = _out, getattr(prog, "log", None)
+    try:
+        yield
+    finally:
+        _out = previous
 
 
 def remote(name: str, script: str, timeout: float = 3600, check: bool = True,
            capture: bool = False, input: Optional[bytes] = None) -> subprocess.CompletedProcess:
+    route = {} if capture or _out is None else {"stdout": _out, "stderr": subprocess.STDOUT}
     proc = subprocess.run(
         config.ssh_base() + ["-o", "BatchMode=yes", "-o", "ConnectTimeout=15", sshconf.alias(name), "bash -lc " + shlex.quote(script)],
-        timeout=timeout, capture_output=capture, input=input,
+        timeout=timeout, capture_output=capture, input=input, **route,
     )
     if check and proc.returncode != 0:
         raise RuntimeError("%s: remote command failed (%d)" % (name, proc.returncode))
@@ -76,9 +97,16 @@ true
 """
 
 
-def sync(name: str) -> None:
+def sync(name: str) -> bool:
+    """Pull and restow on the spoke; False when it was already current."""
     say("syncing dotfiles on %s" % name)
-    remote(name, SYNC_SCRIPT, timeout=1800)
+    proc = remote(name, SYNC_SCRIPT, timeout=1800, capture=True)
+    text = (proc.stdout or b"").decode(errors="replace") + (proc.stderr or b"").decode(errors="replace")
+    if _out is not None:
+        _out.write(text)
+    elif text.strip():
+        sys.stderr.write(text)
+    return "dotfiles already current" not in text
 
 
 def clone(name: str, repos: List[str]) -> List[str]:
@@ -93,8 +121,17 @@ def clone(name: str, repos: List[str]) -> List[str]:
     return paths
 
 
-def create(name: str, size: Optional[str], repos: List[str], harness: Optional[str]) -> str:
+def spoke_phases(gpu: bool, repos: List[str]) -> List[Any]:
+    phases = [("create", "Create VM", 100), ("boot", "Boot and SSH", 20)]
+    phases.append(("bootstrap", "Bootstrap (GPU image)", 1500) if gpu else ("sync", "Sync dotfiles", 45))
+    phases += [("clone", "Clone repos", 15 * max(len(repos), 1)), ("agent", "Start agent", 3)]
+    return phases
+
+
+def create(name: str, size: Optional[str], repos: List[str], harness: Optional[str],
+           prog: Any = None) -> str:
     """Create, bring up and provision a spoke; returns the main slot's cwd."""
+    prog = prog or progress.NullProgress()
     cfg = config.settings()
     if not NAME_RE.match(name) or name == BUILDER:
         raise ValueError("spoke names are lowercase letters, digits and dashes")
@@ -104,27 +141,63 @@ def create(name: str, size: Optional[str], repos: List[str], harness: Optional[s
     harness = harness or cfg["default_harness"]
     gpu = size.startswith("gpu-")
     region = cfg["gpu_region"] if gpu else cfg["region"]
-    say("creating %s (%s, %s)" % (name, size, region))
-    registry.put_spoke(name, size=size, region=region, harness=harness, keep_awake=False, idle_since=None)
-    machine0.new(name, size, region, None if gpu else cfg["image"], cfg["ssh_key"], cfg["profile"])
-    bring_up(name)
-    if gpu:
-        bootstrap(name)
-    else:
-        sync(name)
-    paths = clone(name, repos)
-    registry.put_spoke(name, pending=False)
+    with logging_to(prog):
+        say("creating %s (%s, %s)" % (name, size, region))
+        registry.put_spoke(name, size=size, region=region, harness=harness, keep_awake=False, idle_since=None)
+        with prog.step("create"):
+            machine0.new(name, size, region, None if gpu else cfg["image"], cfg["ssh_key"], cfg["profile"])
+        with prog.step("boot"):
+            bring_up(name)
+        if gpu:
+            with prog.step("bootstrap"):
+                bootstrap(name)
+        else:
+            with prog.step("sync"):
+                if not sync(name):
+                    prog.note("sync", "already current")
+        if repos:
+            with prog.step("clone"):
+                paths = clone(name, repos)
+        else:
+            paths = []
+            prog.skip("clone", "none")
+        registry.put_spoke(name, pending=False)
     return paths[0] if paths else "~"
 
 
+def spoke_progress(name: str, size: Optional[str], harness: Optional[str], repos: List[str]) -> Any:
+    cfg = config.settings()
+    size = size or cfg["default_size"]
+    gpu = size.startswith("gpu-")
+    sub = "%s · %s · %s" % (size, cfg["gpu_region"] if gpu else cfg["region"], harness or cfg["default_harness"])
+    return progress.Progress("New spoke %s" % name, sub, spoke_phases(gpu, repos),
+                             config.state_path("logs", "new-%s.log" % name))
+
+
+def report_failure(prog: Any, name: str, error: BaseException) -> None:
+    lines = prog.tail(12)
+    print("\n  creating %s failed: %s" % (name, error), file=sys.stderr)
+    if lines:
+        print("  last lines of %s:" % getattr(prog, "log_path", "the log"), file=sys.stderr)
+        for line in lines:
+            print("    " + line, file=sys.stderr)
+    print("  `spoke rm %s --force` cleans up." % name, file=sys.stderr)
+
+
 def new(name: str, size: Optional[str], repos: List[str], harness: Optional[str], focus: bool = True) -> int:
+    harness = harness or config.settings()["default_harness"]
+    prog = spoke_progress(name, size, harness, repos)
     try:
-        cwd = create(name, size, repos, harness)
+        with prog:
+            cwd = create(name, size, repos, harness, prog)
+            with prog.step("agent"):
+                hub.open_slot(name, "main", harness, cwd, focus=focus)
     except ValueError as e:
         say(str(e))
         return 1
-    harness = harness or config.settings()["default_harness"]
-    hub.open_slot(name, "main", harness, cwd, focus=focus)
+    except Exception as e:
+        report_failure(prog, name, e)
+        return 1
     say("%s is up" % name)
     return 0
 
@@ -161,7 +234,7 @@ def new_in_pane(name: str, size: Optional[str], harness: Optional[str], grace: i
     cfg = config.settings()
     size = size or cfg["default_size"]
     harness = harness or cfg["default_harness"]
-    say("\n  New space, new spoke: %s (%s, %s, %s)." % (name, size, cfg["region"], harness))
+    say("\n  New space, new spoke: %s (%s · %s · %s)" % (name, size, cfg["region"], harness))
     if not _grace(grace):
         registry.drop_spoke(name)
         import shutil
@@ -171,8 +244,13 @@ def new_in_pane(name: str, size: Optional[str], harness: Optional[str], grace: i
             herdr.quiet("workspace.rename", {"workspace_id": workspace, "label": "hub"})
         say("  Kept as a plain hub shell. `spoke new <name>` makes a spoke later.")
         return KEPT
+    prog = spoke_progress(name, size, harness, [])
     try:
-        cwd = create(name, size, [], harness)
+        with prog:
+            cwd = create(name, size, [], harness, prog)
+            with prog.step("agent"):
+                registry.put_slot(name, "main", harness=harness, cwd=cwd,
+                                  pane_id=os.environ.get("HERDR_PANE_ID"))
     except KeyboardInterrupt:
         say("\n  cancelled; removing %s" % name)
         try:
@@ -184,9 +262,8 @@ def new_in_pane(name: str, size: Optional[str], harness: Optional[str], grace: i
         registry.drop_spoke(name)
         return 130
     except Exception as e:
-        say("\n  creating %s failed: %s\n  `spoke rm %s --force` cleans up." % (name, e, name))
+        report_failure(prog, name, e)
         return 1
-    registry.put_slot(name, "main", harness=harness, cwd=cwd, pane_id=os.environ.get("HERDR_PANE_ID"))
     argv = [sys.executable, "-B", os.path.join(config.PLUGIN_ROOT, "spoke.py"),
             "attach", name, "main", "--harness", harness, "--cwd", cwd]
     os.execv(argv[0], argv)
@@ -299,34 +376,57 @@ def image_build(fresh: bool) -> int:
     if machine0.get(BUILDER):
         say("removing a leftover %s" % BUILDER)
         machine0.destroy(BUILDER)
-    say("building %s from %s" % (cfg["image"], base))
-    machine0.new(BUILDER, "large", cfg["region"], base, cfg["ssh_key"], None)
+    prog = progress.Progress(
+        "Golden image %s" % cfg["image"], "from %s · large · %s" % (base, cfg["region"]),
+        [("create", "Create builder VM", 100), ("boot", "Boot and SSH", 20),
+         ("provision", "Provision spoke", 1200 if base == cfg["base_image"] else 240),
+         ("scrub", "Scrub credentials", 5), ("stop", "Stop builder", 30),
+         ("snapshot", "Snapshot", 300), ("promote", "Promote and prune", 10),
+         ("cleanup", "Delete builder", 20)],
+        config.state_path("logs", "image-build.log"))
     try:
-        bring_up(BUILDER)
-        if base == cfg["base_image"]:
-            bootstrap(BUILDER)
-        else:
-            sync(BUILDER)
-            remote(BUILDER, "~/dotfiles/m0/bin/bootstrap-m0 --role spoke --host machine0", timeout=7200)
-        remote(BUILDER, "rm -f ~/.local/state/herdr-machine0/synced", timeout=60)
-        sync(BUILDER)  # leaves the stamp, so clones skip a redundant sync
-        remote(BUILDER, SCRUB_SCRIPT, timeout=300)
-        # machine0 only snapshots a stopped instance, and `images save` returns
-        # before the snapshot exists, so stop first and wait for it after.
-        say("stopping %s" % BUILDER)
-        machine0.run(["stop", BUILDER], timeout=600)
-        wait_status(BUILDER, machine0.STOPPED)
-        out = machine0.run(["images", "save", BUILDER, cfg["image"]], timeout=3600)
-        m = re.search(r"v(\d+) \(draft\)", out)
-        say("snapshotting (this takes a while)")
-        wait_image(cfg["image"], int(m.group(1)) if m else None)
-        if m:
-            machine0.run(["images", "versions", "promote", cfg["image"], m.group(1)])
-            prune(cfg["image"], keep=2)
-        say("image %s ready" % cfg["image"])
-    finally:
-        machine0.destroy(BUILDER)
-        sshconf.remove(BUILDER)
+        with prog, logging_to(prog):
+            with prog.step("create"):
+                machine0.new(BUILDER, "large", cfg["region"], base, cfg["ssh_key"], None)
+            try:
+                with prog.step("boot"):
+                    bring_up(BUILDER)
+                with prog.step("provision"):
+                    if base == cfg["base_image"]:
+                        bootstrap(BUILDER)
+                    else:
+                        sync(BUILDER)
+                        remote(BUILDER, "~/dotfiles/m0/bin/bootstrap-m0 --role spoke --host machine0",
+                               timeout=7200)
+                    remote(BUILDER, "rm -f ~/.local/state/herdr-machine0/synced", timeout=60)
+                    sync(BUILDER)  # leaves the stamp, so clones skip a redundant sync
+                with prog.step("scrub"):
+                    remote(BUILDER, SCRUB_SCRIPT, timeout=300)
+                # machine0 only snapshots a stopped instance, and `images save`
+                # returns before the snapshot exists, so stop first, wait after.
+                with prog.step("stop"):
+                    machine0.run(["stop", BUILDER], timeout=600)
+                    wait_status(BUILDER, machine0.STOPPED)
+                with prog.step("snapshot"):
+                    out = machine0.run(["images", "save", BUILDER, cfg["image"]], timeout=3600)
+                    say(out)
+                    m = re.search(r"v(\d+) \(draft\)", out)
+                    wait_image(cfg["image"], int(m.group(1)) if m else None)
+                with prog.step("promote"):
+                    if m:
+                        machine0.run(["images", "versions", "promote", cfg["image"], m.group(1)])
+                        prune(cfg["image"], keep=2)
+                        prog.note("promote", "v" + m.group(1))
+            finally:
+                with prog.step("cleanup"):
+                    machine0.destroy(BUILDER)
+                    sshconf.remove(BUILDER)
+    except Exception as e:
+        print("\n  image build failed: %s" % e, file=sys.stderr)
+        for line in prog.tail(12):
+            print("    " + line, file=sys.stderr)
+        return 1
+    print("  image %s ready" % cfg["image"], file=sys.stderr)
     return 0
 
 
