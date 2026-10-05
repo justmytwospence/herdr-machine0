@@ -134,7 +134,7 @@ Hub:
 ```
 spoke new [<name>] --repo owner/repo [--size large] [--harness pi]   # a repo's spoke
 spoke new <name>                     # a scratch spoke
-spoke worktree <spoke> <branch>      # a worktree of a repo spoke, as a new tab
+spoke worktree <spoke> <branch> [--rm [--force]]   # a worktree as a new tab, or remove one
 spoke repos [list|refresh|import]    # the repos new spaces offer
 spoke ls | wake <name> | suspend <name> | ssh <name> [cmd] | keep-awake <name> [on|off]
 spoke rm <name> [--force]            # refuses with unpushed work; archives sessions

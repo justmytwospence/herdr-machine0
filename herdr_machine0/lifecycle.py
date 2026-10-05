@@ -448,6 +448,38 @@ def add_worktree(spoke: str, branch: str, harness: Optional[str] = None, focus: 
     return 0
 
 
+def remove_worktree(spoke: str, branch: str, force: bool = False) -> int:
+    """Close the worktree's tab, stop its agent and remove the checkout (the branch stays)."""
+    info = registry.load()["spokes"].get(spoke) or {}
+    if not info.get("repo"):
+        say("%s is a scratch spoke" % spoke)
+        return 1
+    root = repos_mod.checkout(info["repo"])
+    dest = "%s/.worktrees/%s" % (root, repos_mod.slug(branch, 60))
+    slots = [s for s in registry.load()["slots"].values()
+             if s.get("spoke") == spoke and (s.get("cwd") or "").rstrip("/") == dest]
+    m = machine0.get(spoke)
+    if machine0.status(m) != machine0.RUNNING:
+        say("%s is %s; wake it first" % (spoke, machine0.status(m).lower()))
+        return 1
+    sshconf.update(spoke, machine0.ip(m) or "")
+    if not force:
+        dirty = remote(spoke, "cd %s && git status --porcelain | head -3" % dest, check=False, capture=True)
+        if (dirty.stdout or b"").strip():
+            say("%s has uncommitted changes; commit them or use --force" % dest)
+            return 1
+    for s in slots:
+        if s.get("pane_id"):
+            herdr.quiet("pane.close", {"pane_id": s["pane_id"]})
+        remote(spoke, "pkill -f 'dtach/%s.sock' || true" % s["slot"], check=False)
+    remote(spoke, "cd %s && git worktree remove %s %s" % (root, "--force" if force else "", dest), timeout=300)
+    with registry.locked() as data:
+        for s in slots:
+            data["slots"].pop(registry.slot_key(spoke, s["slot"]), None)
+    say("%s: removed worktree %s (branch kept)" % (spoke, branch))
+    return 0
+
+
 def suspend(name: str) -> int:
     machine0.suspend(name)
     registry.put_spoke(name, idle_since=None)

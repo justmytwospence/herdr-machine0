@@ -66,6 +66,8 @@ def cmd_pick_space(a: argparse.Namespace) -> int:
 def cmd_worktree(a: argparse.Namespace) -> int:
     need("hub")
     from . import lifecycle
+    if a.rm:
+        return lifecycle.remove_worktree(a.spoke, a.branch, a.force)
     return lifecycle.add_worktree(a.spoke, a.branch, a.harness, focus=not a.no_focus)
 
 
@@ -426,6 +428,8 @@ def parser() -> argparse.ArgumentParser:
     s.add_argument("branch")
     s.add_argument("--harness", choices=config.HARNESSES)
     s.add_argument("--no-focus", action="store_true")
+    s.add_argument("--rm", action="store_true", help="close its tab and remove the checkout (branch kept)")
+    s.add_argument("--force", action="store_true", help="with --rm: discard uncommitted changes")
     s.set_defaults(fn=cmd_worktree)
 
     s = sub.add_parser("repos", help="the repos new spaces can open")
