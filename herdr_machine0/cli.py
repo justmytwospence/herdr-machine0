@@ -34,17 +34,55 @@ def cmd_attach(a: argparse.Namespace) -> int:
 def cmd_new(a: argparse.Namespace) -> int:
     need("hub")
     from . import herdr, lifecycle
+    from . import repos
+    repo = repos.normalize(a.repo[0]) if a.repo else None
+    if a.repo and not repo:
+        print("not a GitHub repo: %s" % a.repo[0], file=sys.stderr)
+        return 2
+    name = a.name or (repo and (repos.spoke_for(repo) or repos.spoke_name(repo)))
+    if not name:
+        print("spoke new needs a name or --repo owner/repo", file=sys.stderr)
+        return 2
+    a.name = name
     if a.in_pane:
-        return lifecycle.new_in_pane(a.name, a.size, a.harness,
-                                     int(config.settings()["auto_spoke_grace_s"]))
+        return lifecycle.new_in_pane(name, a.size, a.harness, repo=repo)
     try:
-        rc = lifecycle.new(a.name, a.size, a.repo or [], a.harness, focus=not a.no_focus)
+        rc = lifecycle.new(name, a.size, a.repo[1:] if a.repo else [], a.harness, focus=not a.no_focus,
+                           repo=repo)
     except Exception as e:
         herdr.notify("spoke new %s failed" % a.name, str(e)[:200])
         raise
     if rc == 0:
         herdr.notify("%s is ready" % a.name, "its pane is open")
     return rc
+
+
+def cmd_pick_space(a: argparse.Namespace) -> int:
+    need("hub")
+    from . import space
+    return space.main(a.workspace)
+
+
+def cmd_worktree(a: argparse.Namespace) -> int:
+    need("hub")
+    from . import lifecycle
+    return lifecycle.add_worktree(a.spoke, a.branch, a.harness, focus=not a.no_focus)
+
+
+def cmd_repos(a: argparse.Namespace) -> int:
+    need("hub")
+    from . import machine0, registry, repos
+    if a.action == "import":
+        repos.store(json.load(sys.stdin))
+    elif a.action == "refresh":
+        running = [n for n in registry.load()["spokes"]
+                   if machine0.status(machine0.get(n)) == machine0.RUNNING]
+        if not any(repos.refresh_from(n) for n in running):
+            print("no running spoke could list repos (gh); `spoke repos import` takes gh's JSON", file=sys.stderr)
+            return 1
+    for c in repos.choices():
+        print("%-40s %s" % (c["repo"], c["spoke"] or ""))
+    return 0
 
 
 def cmd_on_workspace_created(a: argparse.Namespace) -> int:
@@ -367,9 +405,10 @@ def parser() -> argparse.ArgumentParser:
     s.set_defaults(fn=cmd_attach)
 
     s = sub.add_parser("new", help="create a spoke from the golden image")
-    s.add_argument("name")
+    s.add_argument("name", nargs="?", help="defaults to the repo's name with --repo")
     s.add_argument("--size")
-    s.add_argument("--repo", action="append", help="owner/repo to clone into ~/Projects (repeatable)")
+    s.add_argument("--repo", action="append",
+                   help="owner/repo the spoke is for (cloned to ~/Projects/<repo>); more are cloned beside it")
     s.add_argument("--harness", choices=config.HARNESSES)
     s.add_argument("--no-focus", action="store_true")
     s.add_argument("--in-pane", action="store_true", help="create here, then become its main slot")
@@ -377,6 +416,21 @@ def parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("on-workspace-created", help="(hook) turn a new hub space into a spoke")
     s.set_defaults(fn=cmd_on_workspace_created)
+
+    s = sub.add_parser("pick-space", help="(hook) ask which repo a new space is for; prints shell code")
+    s.add_argument("--workspace")
+    s.set_defaults(fn=cmd_pick_space)
+
+    s = sub.add_parser("worktree", help="a worktree of a repo spoke, as a new tab of its space")
+    s.add_argument("spoke")
+    s.add_argument("branch")
+    s.add_argument("--harness", choices=config.HARNESSES)
+    s.add_argument("--no-focus", action="store_true")
+    s.set_defaults(fn=cmd_worktree)
+
+    s = sub.add_parser("repos", help="the repos new spaces can open")
+    s.add_argument("action", nargs="?", choices=("list", "refresh", "import"), default="list")
+    s.set_defaults(fn=cmd_repos)
 
     s = sub.add_parser("rm", help="destroy a spoke (refuses with unpushed work)")
     s.add_argument("name")

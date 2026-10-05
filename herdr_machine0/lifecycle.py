@@ -11,7 +11,7 @@ import time
 import contextlib
 from typing import Any, Dict, Iterator, List, Optional
 
-from . import config, herdr, hub, machine0, progress, registry, sshconf
+from . import config, herdr, hub, machine0, progress, registry, repos as repos_mod, sshconf
 
 NAME_RE = re.compile(r"^[a-z][a-z0-9-]{1,40}$")
 BUILDER = "m0-spoke-build"
@@ -132,15 +132,26 @@ def spoke_phases(gpu: bool, repos: List[str]) -> List[Any]:
     if gpu:
         phases.append(("provision", "Provision (GPU image)", 1500))
     phases.append(("sync", "Sync", 45))
-    phases += [("clone", "Clone repos", 15 * max(len(repos), 1)), ("agent", "Start agent", 3)]
+    phases += [("clone", "Clone %s" % repos[0] if len(repos) == 1 else "Clone repos", 15 * max(len(repos), 1)),
+               ("setup", "Repo setup", 30), ("agent", "Start agent", 3)]
     return phases
 
 
+def run_setup(name: str, path: str, root: str, branch: str) -> None:
+    """The repo's own setup convention, if it has one (repos.SETUP_SCRIPT)."""
+    remote(name, "bash -s -- %s %s %s <<'HERDR_MACHINE0_SETUP'\n%s\nHERDR_MACHINE0_SETUP" % (
+        path, root, shlex.quote(branch), repos_mod.SETUP_SCRIPT), timeout=3600, check=False)
+
+
 def create(name: str, size: Optional[str], repos: List[str], harness: Optional[str],
-           prog: Any = None) -> str:
-    """Create, bring up and provision a spoke; returns the main slot's cwd."""
+           prog: Any = None, repo: Optional[str] = None) -> str:
+    """Create, bring up and provision a spoke; returns the main slot's cwd.
+    With `repo`, the spoke is that repo's: cloned first, its setup run."""
     prog = prog or progress.NullProgress()
     cfg = config.settings()
+    if repo:
+        repos = [repo] + [r for r in repos if r != repo]
+        size = size or (cfg.get("repo_sizes") or {}).get(repo)
     if not NAME_RE.match(name) or name == BUILDER:
         raise ValueError("spoke names are lowercase letters, digits and dashes")
     if machine0.get(name):
@@ -151,7 +162,8 @@ def create(name: str, size: Optional[str], repos: List[str], harness: Optional[s
     region = cfg["gpu_region"] if gpu else cfg["region"]
     with logging_to(prog):
         say("creating %s (%s, %s)" % (name, size, region))
-        registry.put_spoke(name, size=size, region=region, harness=harness, keep_awake=False, idle_since=None)
+        registry.put_spoke(name, size=size, region=region, harness=harness, keep_awake=False, idle_since=None,
+                           **({"repo": repo} if repo else {}))
         with prog.step("create"):
             machine0.new(name, size, region, None if gpu else cfg["image"], cfg["ssh_key"], cfg["profile"])
             m = machine0.wait_running(name)
@@ -170,11 +182,17 @@ def create(name: str, size: Optional[str], repos: List[str], harness: Optional[s
         else:
             paths = []
             prog.skip("clone", "none")
+        if repo:
+            with prog.step("setup"):
+                run_setup(name, paths[0], paths[0], "main")
+        else:
+            prog.skip("setup", "no repo")
         registry.put_spoke(name, pending=False)
     return paths[0] if paths else "~"
 
 
 def spoke_progress(name: str, size: Optional[str], harness: Optional[str], repos: List[str]) -> Any:
+    """`repos` names what gets cloned (the phase label); empty for scratch spokes."""
     cfg = config.settings()
     size = size or cfg["default_size"]
     gpu = size.startswith("gpu-")
@@ -193,12 +211,13 @@ def report_failure(prog: Any, name: str, error: BaseException) -> None:
     print("  `spoke rm %s --force` cleans up." % name, file=sys.stderr)
 
 
-def new(name: str, size: Optional[str], repos: List[str], harness: Optional[str], focus: bool = True) -> int:
+def new(name: str, size: Optional[str], repos: List[str], harness: Optional[str], focus: bool = True,
+        repo: Optional[str] = None) -> int:
     harness = harness or config.settings()["default_harness"]
-    prog = spoke_progress(name, size, harness, repos)
+    prog = spoke_progress(name, size, harness, ([repo] if repo else []) + [r for r in repos if r != repo])
     try:
         with prog:
-            cwd = create(name, size, repos, harness, prog)
+            cwd = create(name, size, repos, harness, prog, repo=repo)
             with prog.step("agent"):
                 hub.open_slot(name, "main", harness, cwd, focus=focus)
     except ValueError as e:
@@ -237,14 +256,14 @@ def _grace(seconds: int) -> bool:
 KEPT = 3  # exit status of `new --in-pane` when the user keeps a hub shell
 
 
-def new_in_pane(name: str, size: Optional[str], harness: Optional[str], grace: int = 5) -> int:
-    """`spoke new --in-pane`: the new-space hook's command. Creates the spoke in
-    front of you, then turns this pane into the spoke's main slot."""
+def new_in_pane(name: str, size: Optional[str], harness: Optional[str], grace: int = 0,
+                repo: Optional[str] = None) -> int:
+    """`spoke new --in-pane`: what a new hub space runs once its repo is picked.
+    Creates the spoke in front of you, then turns this pane into its main slot."""
     cfg = config.settings()
-    size = size or cfg["default_size"]
+    size = size or (cfg.get("repo_sizes") or {}).get(repo or "") or cfg["default_size"]
     harness = harness or cfg["default_harness"]
-    say("\n  New space, new spoke: %s (%s · %s · %s)" % (name, size, cfg["region"], harness))
-    if not _grace(grace):
+    if grace and not _grace(grace):
         registry.drop_spoke(name)
         import shutil
         shutil.rmtree(os.path.join(config.STATE_DIR, "panes", name), ignore_errors=True)
@@ -253,10 +272,10 @@ def new_in_pane(name: str, size: Optional[str], harness: Optional[str], grace: i
             herdr.quiet("workspace.rename", {"workspace_id": workspace, "label": "hub"})
         say("  Kept as a plain hub shell. `spoke new <name>` makes a spoke later.")
         return KEPT
-    prog = spoke_progress(name, size, harness, [])
+    prog = spoke_progress(name, size, harness, [repo] if repo else [])
     try:
         with prog:
-            cwd = create(name, size, [], harness, prog)
+            cwd = create(name, size, [], harness, prog, repo=repo)
             with prog.step("agent"):
                 registry.put_slot(name, "main", harness=harness, cwd=cwd,
                                   pane_id=os.environ.get("HERDR_PANE_ID"))
@@ -365,6 +384,42 @@ def wake(name: str) -> int:
     except Exception as e:
         say("waking %s failed: %s" % (name, e))
         return 1
+    return 0
+
+
+WORKTREE_SCRIPT = r"""
+set -e
+root={root}; branch={branch}; dest={dest}
+cd "$root"
+git fetch -q origin 2>/dev/null || true
+if [ -d "$dest" ]; then echo "worktree exists: $dest"
+elif git show-ref --verify -q "refs/heads/$branch"; then git worktree add -q "$dest" "$branch"
+elif git show-ref --verify -q "refs/remotes/origin/$branch"; then git worktree add -q -b "$branch" "$dest" "origin/$branch"
+else git worktree add -q -b "$branch" "$dest" "$(git symbolic-ref -q --short refs/remotes/origin/HEAD || echo HEAD)"
+fi
+"""
+
+
+def add_worktree(spoke: str, branch: str, harness: Optional[str] = None, focus: bool = True) -> int:
+    """A worktree of the spoke's repo on the spoke, as a new tab of its space."""
+    info = registry.load()["spokes"].get(spoke) or {}
+    repo = info.get("repo")
+    if not repo:
+        say("%s is a scratch spoke; worktrees need a repo spoke" % spoke)
+        return 1
+    m = machine0.get(spoke)
+    if machine0.status(m) != machine0.RUNNING:
+        say("%s is %s; wake it first (spoke wake %s)" % (spoke, machine0.status(m).lower(), spoke))
+        return 1
+    sshconf.update(spoke, machine0.ip(m) or "")
+    root = repos_mod.checkout(repo)
+    dest = "%s/.worktrees/%s" % (root, repos_mod.slug(branch, 60))
+    remote(spoke, WORKTREE_SCRIPT.format(root=root, branch=shlex.quote(branch), dest=dest), timeout=600)
+    run_setup(spoke, dest, root, branch)
+    slot = registry.next_slot(spoke, repos_mod.branch_slot(branch))
+    hub.open_slot(spoke, slot, harness or info.get("harness") or config.settings()["default_harness"],
+                  dest, focus=focus)
+    say("%s: worktree %s open as tab %s" % (spoke, branch, slot))
     return 0
 
 

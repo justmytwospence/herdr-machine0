@@ -34,43 +34,38 @@ def choose(title: str, options: List[str]) -> int:
             raise SystemExit(0)
 
 
+def _new_space(label: str) -> tuple:
+    result = hub.herdr.call("workspace.create", {"cwd": os.path.expanduser("~"), "label": label, "focus": True})
+    return result["workspace"]["workspace_id"], result["root_pane"]["pane_id"]
+
+
 def main() -> int:
-    cfg = config.settings()
-    reg = registry.load()
-    try:
-        states = {m.get("name"): machine0.status(m) for m in machine0.machines()}
-    except machine0.Machine0Error as e:
-        print("machine0: %s" % e)
-        states = {}
-    names = sorted(reg["spokes"])
-    options = ["%s (%s)" % (n, states.get(n, "?").lower()) for n in names] + ["+ new spoke"]
-    pick = choose("New agent on which spoke? (q quits)", options)
-    if pick == len(names):
-        name = ask("spoke name")
-        size = ask("size", cfg["default_size"])
-        repos = ask("repos to clone (owner/repo, space separated)", "").split()
-        harness = ask("harness (%s)" % "/".join(config.HARNESSES), cfg["default_harness"])
-        argv = [os.path.join(config.PLUGIN_ROOT, "spoke.py"), "new", name, "--size", size, "--harness", harness]
-        for r in repos:
-            argv += ["--repo", r]
-        log = config.state_path("logs", "new-%s.log" % name)
-        with open(log, "a") as out:
-            subprocess.Popen([sys.executable, "-B"] + argv, stdin=subprocess.DEVNULL, stdout=out, stderr=out,
-                             start_new_session=True, env=dict(os.environ))
-        print("creating %s in the background (log: %s); its pane opens when it is ready" % (name, log))
-        time.sleep(2)
+    """prefix+N: a repo's space (or a new worktree tab in it), a new repo spoke, or a scratch spoke."""
+    from . import autospoke, lifecycle, picker, repos, space
+    choice = picker.pick("open")
+    if not choice or choice["kind"] == "hub":
         return 0
-    spoke = names[pick]
-    default_harness = reg["spokes"][spoke].get("harness") or cfg["default_harness"]
-    harness = ask("harness (%s)" % "/".join(config.HARNESSES), default_harness)
-    if harness not in config.HARNESSES:
-        print("unknown harness")
-        return 1
-    main_cwd = (reg["slots"].get(registry.slot_key(spoke, "main")) or {}).get("cwd") or "~"
-    cwd = ask("directory on %s" % spoke, main_cwd)
-    label = ask("label", harness)
-    slot = registry.next_slot(spoke, label)
-    hub.open_slot(spoke, slot, harness, cwd, focus=True)
+    if choice["kind"] == "scratch" or not choice.get("spoke"):
+        repo = choice.get("repo")
+        name = repos.spoke_name(repo) if repo else autospoke.new_name(registry.load()["spokes"])
+        # Registered before the space exists, so the new-space hook leaves it alone.
+        registry.put_spoke(name, pending=True, **({"repo": repo} if repo else {}))
+        workspace, pane = _new_space(name)
+        hub.run_in_pane(pane, space.start_new(workspace, name, repo))
+        return 0
+    spoke = choice["spoke"]
+    branch = ask("new worktree branch on %s (empty: open its main checkout)" % spoke)
+    if branch:
+        rc = lifecycle.add_worktree(spoke, branch)
+        if rc:
+            ask("press Enter to close")
+        return rc
+    workspace = hub.spoke_workspace(spoke)
+    if workspace:
+        hub.herdr.quiet("workspace.focus", {"workspace_id": workspace})
+        return 0
+    workspace, pane = _new_space(spoke)
+    hub.run_in_pane(pane, space.claim(workspace, spoke))
     return 0
 
 

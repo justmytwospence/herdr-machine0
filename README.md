@@ -33,13 +33,23 @@ Mac / phone ──herdr / Heeler──▶ hub (one herdr server, broker, hubd)
   those panes, which it finds by their cwd (each slot pane's cwd is that slot's
   own directory).
 - **Credentials.** See below. Claude and Codex never fall back to API billing.
-- **New space, new spoke.** A space you open on the hub (prefix+c, the
-  sidebar) becomes a new spoke: the plugin's `workspace.created` hook names one
-  (`brisk-otter`), renames the space, and runs `spoke new <name> --in-pane` in
-  it. That shows a 5-second grace period (any key keeps a plain hub shell),
-  creates the VM from the golden image, and turns the pane into the spoke's main
-  slot. Spaces herdr-machine0 opens itself, worktree spaces and restored
-  sessions are left alone. Off with `"auto_spoke_on_new_space": false`.
+- **One spoke per repo, one tab per worktree.** A space you open on the hub
+  (prefix+c, the sidebar) asks which repo it is for: the repos `gh` lists on
+  your spokes (cached, refreshed hourly), or any `owner/repo` you type. A repo
+  with a spoke opens it here (or focuses its space when one is open); a new
+  repo gets a spoke named after it, with the repo cloned to `~/Projects/<repo>`
+  and its setup run. "scratch" makes a repo-less spoke; Esc keeps a plain hub
+  shell. Worktrees live in `~/Projects/<repo>/.worktrees/<branch>`, one tab
+  each: `spoke worktree <spoke> <branch>` on the hub, the popup's branch
+  prompt, or `spoke open-slot` from a spoke. Spaces herdr-machine0 opens itself,
+  worktree spaces and restored sessions are left alone; turn the whole
+  behaviour off with `"auto_spoke_on_new_space": false`.
+- **Repo setup.** After the clone and after each new worktree, the repo's own
+  setup runs, if it has one: `.herdr-machine0/setup.sh` (executable), else
+  `conductor.json`'s `scripts.setup` (with Conductor's
+  `CONDUCTOR_ROOT_PATH`, `CONDUCTOR_WORKSPACE_PATH` and
+  `CONDUCTOR_WORKSPACE_NAME` set). `repo_sizes` in the config picks a bigger VM
+  for a heavy repo.
 - **Auto-suspend.** `spoke hubd` suspends a spoke once every slot has been
   idle or done for 2 hours, with no attention-queue `bg` or `activity` token,
   a 15-minute load under 0.3, and keep-awake off. A suspended spoke's pane shows
@@ -122,7 +132,10 @@ description = "machine0: new agent / new spoke"
 Hub:
 
 ```
-spoke new <name> [--size large] [--repo owner/repo]... [--harness pi]
+spoke new [<name>] --repo owner/repo [--size large] [--harness pi]   # a repo's spoke
+spoke new <name>                     # a scratch spoke
+spoke worktree <spoke> <branch>      # a worktree of a repo spoke, as a new tab
+spoke repos [list|refresh|import]    # the repos new spaces offer
 spoke ls | wake <name> | suspend <name> | ssh <name> [cmd] | keep-awake <name> [on|off]
 spoke rm <name> [--force]            # refuses with unpushed work; archives sessions
 spoke sync <name> | --running        # pull dotfiles and restow on spokes

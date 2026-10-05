@@ -12,7 +12,7 @@ import sys
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-from . import config, herdr, hub, idle, machine0, registry, sshconf
+from . import config, herdr, hub, idle, machine0, registry, repos, sshconf
 
 
 def _pidfile() -> str:
@@ -84,6 +84,13 @@ def check(path: Optional[str]) -> None:
     if not reg["spokes"]:
         return
     states = {m.get("name"): m for m in machine0.machines()}
+    running = [n for n in reg["spokes"] if machine0.status(states.get(n)) == machine0.RUNNING]
+    if running and repos.stale():
+        # The repo list new spaces offer, from gh on any spoke that is up.
+        for name in running:
+            sshconf.update(name, machine0.ip(states.get(name)) or "")
+            if repos.refresh_from(name):
+                break
     view = slot_view(path)
     now = time.time()
     for name, info in reg["spokes"].items():

@@ -46,6 +46,7 @@ def open_slot(spoke: str, slot: str, harness: str, cwd: Optional[str],
         result = herdr.call("workspace.create", {"cwd": pane_cwd, "label": spoke, "focus": focus}, path)
         pane_id = result["root_pane"]["pane_id"]
         registry.put_spoke(spoke, workspace_id=result["workspace"]["workspace_id"])
+        herdr.quiet("tab.rename", {"tab_id": result["tab"]["tab_id"], "label": slot}, path)
     else:
         result = herdr.call("tab.create", {"workspace_id": ws, "cwd": pane_cwd, "label": slot, "focus": focus}, path)
         pane_id = (result.get("root_pane") or {}).get("pane_id") or _first_pane(result, path)
