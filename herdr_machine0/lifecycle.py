@@ -342,9 +342,29 @@ def rm(name: str, force: bool) -> int:
     return 0
 
 
+def wake_spoke(name: str, subtitle: str = "") -> None:
+    """Start a suspended (or stopped) spoke and wait until ssh answers, with a
+    progress display. Raises on failure (the display shows where)."""
+    prog = progress.Progress(
+        "Waking %s" % name, subtitle or "resumes from its snapshot on a new IP",
+        [("start", "Start VM", 90), ("ssh", "Reach SSH", 10)],
+        config.state_path("logs", "wake-%s.log" % name))
+    with prog, logging_to(prog):
+        with prog.step("start"):
+            machine0.start(name)
+            m = machine0.wait_running(name)
+            prog.note("start", machine0.ip(m) or "")
+        with prog.step("ssh"):
+            sshconf.update(name, machine0.ip(m) or "")
+            wait_ssh(name, timeout=300)
+
+
 def wake(name: str) -> int:
-    machine0.start(name)
-    bring_up(name)
+    try:
+        wake_spoke(name)
+    except Exception as e:
+        say("waking %s failed: %s" % (name, e))
+        return 1
     return 0
 
 

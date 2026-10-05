@@ -195,16 +195,17 @@ class Wrapper:
                 self.say("  (input discarded: the spoke is not running; Enter wakes it)\n")
 
     def wake(self) -> None:
+        from . import lifecycle
         self.state("waking")
-        self.say("\n  Waking %s...\n" % self.spoke)
-        machine0.start(self.spoke)
-        m = machine0.wait_running(self.spoke)
-        sshconf.update(self.spoke, machine0.ip(m) or "")
-        deadline = time.time() + 300
-        while ssh(self.alias, "true", timeout=30) != 0:
-            if time.time() > deadline:
-                raise machine0.Machine0Error("%s is running but ssh does not answer" % self.spoke)
-            time.sleep(5)
+        self.cooked()  # the progress display redraws with plain newlines
+        sys.stdout.write(CLEAR)
+        sys.stdout.flush()
+        try:
+            lifecycle.wake_spoke(self.spoke, "%s/%s · reattaches the same session" % (self.spoke, self.slot))
+        except Exception as e:
+            raise machine0.Machine0Error(str(e))
+        finally:
+            self.raw()
         herdr.notify("%s is awake" % self.spoke, self.slot, self.herdr_socket)
 
     # ---- connection --------------------------------------------------------------
