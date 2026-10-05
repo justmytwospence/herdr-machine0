@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -82,7 +83,8 @@ def setup_hub() -> int:
         print("  %s" % e, file=sys.stderr)
     if shutil.which("herdr"):
         rc, out = _run(["herdr", "plugin", "list"])
-        if config.PLUGIN_ROOT not in out:
+        # Registered already, linked or installed from GitHub (dotfiles pins it).
+        if not re.search(r"^- machine0 ", out, re.M):
             _log("linking the herdr plugin")
             _run(["herdr", "plugin", "link", config.PLUGIN_ROOT])
     _log("done; `spoke doctor` lists what is left")
