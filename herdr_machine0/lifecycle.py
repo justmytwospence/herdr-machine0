@@ -347,10 +347,10 @@ def archive(name: str) -> str:
     dest = config.state_path("archive", "%s-%s.tgz" % (name, time.strftime("%Y%m%d-%H%M%S")))
     with open(dest, "wb") as out:
         subprocess.run(
-            config.ssh_base() + ["-o", "BatchMode=yes", sshconf.alias(name),
+            config.ssh_base() + ["-o", "BatchMode=yes", "-n", sshconf.alias(name),
              "cd ~ && tar czf - --ignore-failed-read .pi/agent/sessions .claude/projects .codex/sessions "
              ".local/share/opencode/storage 2>/dev/null"],
-            stdout=out, timeout=1800,
+            stdout=out, stdin=subprocess.DEVNULL, timeout=1800,
         )
     return dest
 
@@ -545,16 +545,20 @@ def image_build(fresh: bool) -> int:
                     machine0.run(["stop", BUILDER], timeout=600)
                     wait_status(BUILDER, machine0.STOPPED)
                 with prog.step("snapshot"):
+                    before = set(image_versions(cfg["image"])) if have else set()
                     out = machine0.run(["images", "save", BUILDER, cfg["image"]], timeout=3600)
                     say(out)
-                    draft = re.search(r"v(\d+) \(draft\)", out)
-                    wait_image(cfg["image"], int(draft.group(1)) if draft else None)
+                    version = new_version(out, before, image_versions(cfg["image"]))
+                    wait_image(cfg["image"], version)
                 with prog.step("promote"):
-                    if draft:
-                        # Promoting retires the previous version. machine0 only
-                        # deletes drafts, so retired versions are its to manage.
-                        machine0.run(["images", "versions", "promote", cfg["image"], draft.group(1)])
-                        prog.note("promote", "v" + draft.group(1))
+                    if version is None:
+                        # Never report success with the old version still live.
+                        raise RuntimeError("could not tell which version the snapshot created; "
+                                           "promote it with `machine0 images versions promote %s <n>`" % cfg["image"])
+                    # Promoting retires the previous version. machine0 only
+                    # deletes drafts, so retired versions are its to manage.
+                    machine0.run(["images", "versions", "promote", cfg["image"], str(version)])
+                    prog.note("promote", "v%d" % version)
             finally:
                 with prog.step("cleanup"):
                     machine0.destroy(BUILDER)
