@@ -20,7 +20,13 @@ def _pidfile() -> str:
 
 
 def log(msg: str) -> None:
-    with open(config.state_path("logs", "hubd.log"), "a") as f:
+    path = config.state_path("logs", "hubd.log")
+    try:
+        if os.path.getsize(path) > 5 * 1024 * 1024:
+            os.replace(path, path + ".1")
+    except OSError:
+        pass
+    with open(path, "a") as f:
         f.write("%s %s\n" % (time.strftime("%Y-%m-%dT%H:%M:%S"), msg))
 
 
