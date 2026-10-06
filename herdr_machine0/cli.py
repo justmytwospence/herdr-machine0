@@ -460,7 +460,7 @@ def parser() -> argparse.ArgumentParser:
     s.add_argument("state", nargs="?", choices=("on", "off"), default="on")
     s.set_defaults(fn=cmd_keep_awake)
 
-    s = sub.add_parser("sync", help="pull dotfiles and restow on spokes")
+    s = sub.add_parser("sync", help="sync the dotfiles (chezmoi) on spokes")
     s.add_argument("name", nargs="?")
     s.add_argument("--running", action="store_true")
     s.set_defaults(fn=cmd_sync)

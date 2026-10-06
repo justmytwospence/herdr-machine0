@@ -22,7 +22,7 @@ class BrokerError(Exception):
 
 
 # A private SDK copy for hosts whose pi is a compiled binary with no JavaScript
-# inside (exe.dev's exeuntu build): bootstrap-m0 installs it here on the hub.
+# inside (exe.dev's exeuntu build): the dotfiles' chezmoi setup installs it here on the hub.
 SDK_DIR = os.path.expanduser("~/.local/share/herdr-machine0/pi-sdk/node_modules/" + PI_PACKAGE)
 
 

@@ -138,7 +138,7 @@ spoke worktree <spoke> <branch> [--rm [--force]]   # a worktree as a new tab, or
 spoke repos [list|refresh|import]    # the repos new spaces offer
 spoke ls | wake <name> | suspend <name> | ssh <name> [cmd] | keep-awake <name> [on|off]
 spoke rm <name> [--force]            # refuses with unpushed work; archives sessions
-spoke sync <name> | --running        # pull dotfiles and restow on spokes
+spoke sync <name> | --running        # sync the dotfiles (chezmoi) on spokes
 spoke image build [--fresh]          # golden image m0-spoke (built, then promoted)
 spoke attach <spoke> [slot] [--harness H] [--cwd DIR] [--takeover]
 spoke popup                          # new agent / new spoke (herdr keybinding)
