@@ -49,9 +49,13 @@ def ensure_hint(harness: str) -> None:
 
 def ssh(alias: str, command: str, input: Optional[bytes] = None, timeout: float = 60) -> int:
     try:
+        # Without input, a closed stdin: the pane's tty is in raw mode and ssh
+        # would otherwise read the user's keys.
         return subprocess.run(
-            config.ssh_base() + ["-o", "BatchMode=yes", "-o", "ConnectTimeout=15", alias, command],
-            input=input, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=timeout,
+            config.ssh_base() + ["-o", "BatchMode=yes", "-o", "ConnectTimeout=15"] + ([] if input else ["-n"])
+            + [alias, command],
+            input=input, stdin=None if input else subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=timeout,
         ).returncode
     except subprocess.TimeoutExpired:
         return 255

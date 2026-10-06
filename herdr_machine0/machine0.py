@@ -22,6 +22,7 @@ def run(args: List[str], timeout: float = 600, input: Optional[str] = None) -> s
     try:
         proc = subprocess.run(
             ["machine0"] + args, capture_output=True, text=True, timeout=timeout, input=input,
+            stdin=None if input is not None else subprocess.DEVNULL,
         )
     except FileNotFoundError:
         raise Machine0Error("machine0 CLI not found on PATH")

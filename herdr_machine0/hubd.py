@@ -70,8 +70,8 @@ def probe(spoke: str) -> Tuple[Optional[float], Optional[float]]:
     """(load15, seconds since an agent last wrote a session file); Nones on failure."""
     try:
         out = subprocess.run(
-            config.ssh_base() + ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", sshconf.alias(spoke), idle.PROBE],
-            capture_output=True, text=True, timeout=30,
+            config.ssh_base() + ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-n", sshconf.alias(spoke), idle.PROBE],
+            capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL,
         )
     except subprocess.TimeoutExpired:
         return None, None

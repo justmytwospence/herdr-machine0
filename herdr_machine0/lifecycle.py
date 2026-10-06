@@ -43,9 +43,13 @@ def logging_to(prog: Any) -> Iterator[None]:
 def remote(name: str, script: str, timeout: float = 3600, check: bool = True,
            capture: bool = False, input: Optional[bytes] = None) -> subprocess.CompletedProcess:
     route = {} if capture or _out is None else {"stdout": _out, "stderr": subprocess.STDOUT}
+    # -n and a closed stdin: no remote program can stop at a prompt or read the
+    # keys typed while a progress display owns the terminal.
     proc = subprocess.run(
-        config.ssh_base() + ["-o", "BatchMode=yes", "-o", "ConnectTimeout=15", sshconf.alias(name), "bash -lc " + shlex.quote(script)],
-        timeout=timeout, capture_output=capture, input=input, **route,
+        config.ssh_base() + ["-o", "BatchMode=yes", "-o", "ConnectTimeout=15"] + ([] if input else ["-n"])
+        + [sshconf.alias(name), "bash -lc " + shlex.quote(script)],
+        timeout=timeout, capture_output=capture, input=input,
+        stdin=None if input else subprocess.DEVNULL, **route,
     )
     if check and proc.returncode != 0:
         raise RuntimeError("%s: remote command failed (%d)" % (name, proc.returncode))
@@ -55,8 +59,8 @@ def remote(name: str, script: str, timeout: float = 3600, check: bool = True,
 def wait_ssh(name: str, timeout: float = 600) -> None:
     deadline = time.time() + timeout
     while True:
-        rc = subprocess.run(config.ssh_base() + ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", sshconf.alias(name), "true"],
-                            capture_output=True).returncode
+        rc = subprocess.run(config.ssh_base() + ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-n", sshconf.alias(name), "true"],
+                            capture_output=True, stdin=subprocess.DEVNULL).returncode
         if rc == 0:
             return
         if time.time() > deadline:
@@ -570,6 +574,26 @@ def image_build(fresh: bool) -> int:
         return 1
     print("  image %s ready" % cfg["image"], file=sys.stderr)
     return 0
+
+
+def image_versions(image: str) -> List[int]:
+    try:
+        versions = machine0.run_json(["images", "versions", "ls", image])
+    except machine0.Machine0Error:
+        return []
+    if isinstance(versions, dict):
+        versions = versions.get("versions") or []
+    return [int(v["version"]) for v in versions if isinstance(v, dict) and v.get("version")]
+
+
+def new_version(save_output: str, before: Any, after: List[int]) -> Optional[int]:
+    """The version `images save` created: the one the version list gained, else
+    the `vN` its output names. None when neither says."""
+    added = sorted(set(after) - set(before))
+    if added:
+        return added[-1]
+    m = re.search(r"\bv(\d+)\b", save_output)
+    return int(m.group(1)) if m else None
 
 
 def wait_status(name: str, want: str, timeout: float = 900) -> None:

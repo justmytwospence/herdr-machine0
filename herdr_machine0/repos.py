@@ -126,9 +126,9 @@ GH_LIST = "gh repo list --limit 300 --no-archived --json nameWithOwner,pushedAt,
 def refresh_from(spoke: str) -> bool:
     try:
         out = subprocess.run(
-            config.ssh_base() + ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", sshconf.alias(spoke),
+            config.ssh_base() + ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-n", sshconf.alias(spoke),
                                  "bash -lc " + json.dumps(GH_LIST)],
-            capture_output=True, text=True, timeout=60)
+            capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired:
         return False
     if out.returncode != 0:
