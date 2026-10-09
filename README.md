@@ -1,5 +1,11 @@
 # herdr-machine0
 
+> **Retired (2026-10).** No longer deployed: the author's setup moved to
+> [AgentBox](https://github.com/madarco/agentbox) (a hub on a homelab server, boxes there or
+> on Daytona) with [herdr-agentbox](https://github.com/justmytwospence/herdr-agentbox) for the
+> one-space-per-agent herdr view. The code still works as last tested; the idle-suspend,
+> credential-broker and progress pieces are the parts most worth borrowing.
+
 One [herdr](https://herdr.dev) server (the **hub**) showing agents that run on
 many small, per-project [machine0](https://machine0.io) VMs (**spokes**). Spokes
 are cloned from a golden image, suspend themselves when idle, and wake when you
