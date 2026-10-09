@@ -1,3 +1,4 @@
+import tests  # noqa: F401  first, so HOME is a throwaway dir before anything reads it
 import os
 import tempfile
 import unittest
